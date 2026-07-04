@@ -160,14 +160,14 @@ function buildInvoiceHtml(txn, payments) {
 
   /* ── Watermark ── */
   .watermark-bg {
-    position: fixed;
+    position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%) rotate(-30deg);
     width: 460px;
     height: 460px;
-    opacity: 0.15;
-    z-index: 0;
+    opacity: 0.1;
+    z-index: -10;
     pointer-events: none;
   }
   .watermark-bg img {
@@ -680,12 +680,12 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
     padding: 16px 20px;
   }
   .watermark-bg {
-    position: fixed;
+    position: absolute;
     top: 50%; left: 50%;
     transform: translate(-50%, -50%) rotate(-30deg);
     width: 460px; height: 460px;
-    opacity: 0.15;
-    z-index: 0;
+    opacity: 0.1;
+    z-index: -10;
     pointer-events: none;
   }
   .watermark-bg img { width: 100%; height: 100%; object-fit: contain; }
@@ -1013,7 +1013,7 @@ function buildFactoryInvoiceHtml(record) {
 <style>
 * { margin:0;padding:0;box-sizing:border-box; }
 body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
-.watermark-bg { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.12;z-index:0;pointer-events:none; }
+.watermark-bg { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.1;z-index:-10;pointer-events:none; }
 .watermark-bg img { width:100%;height:100%;object-fit:contain; }
 .header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
 .logo-img { width:90px;height:90px;object-fit:contain; }
@@ -1073,6 +1073,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <thead><tr>
       <th style="text-align:center;width:40px;">Sl No.</th>
       <th style="text-align:center;">Date</th>
+      <th style="text-align:center;">Tea Type</th>
       <th style="text-align:right;">Total QTY<br/>(kg)</th>
       <th style="text-align:right;">Less %</th>
       <th style="text-align:right;">Less QTY<br/>(kg)</th>
@@ -1085,6 +1086,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       <tr class="row-even">
         <td style="text-align:center;">1</td>
         <td style="text-align:center;">${fmtDate(record.date)}</td>
+        <td style="text-align:center;font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
         <td style="text-align:right;">${fmt(qty)}</td>
         <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
         <td style="text-align:right;">${fmt(lessQty)}</td>
@@ -1097,11 +1099,11 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       <tr class="row-odd" style="font-style: italic; color: #444; background: #fafafa;">
         <td style="text-align:center;"></td>
         <td style="text-align:center;">${fmtDate(p.date)}</td>
-        <td colspan="6" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
+        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
         <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
       </tr>`).join('')}
       <tr class="total-row">
-        <td colspan="3" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
+        <td colspan="4" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
         <td>&mdash;</td>
         <td style="text-align:right;"><strong>${fmt(lessQty)}</strong></td>
         <td style="text-align:right;"><strong>${fmt(netQty)}</strong></td>
@@ -1215,7 +1217,7 @@ function buildMultiFactoryInvoiceHtml(buyerName, records) {
       <tr class="row-even" style="font-style: italic; color: #444; background: #fafafa;">
         <td style="text-align:center;"></td>
         <td style="text-align:center;">${fmtDate(p.date)}</td>
-        <td colspan="6" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
+        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
         <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
       </tr>
     `).join('');
@@ -1224,6 +1226,7 @@ function buildMultiFactoryInvoiceHtml(buyerName, records) {
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
         <td style="text-align:center;">${i + 1}</td>
         <td style="text-align:center;">${fmtDate(record.date)}</td>
+        <td style="text-align:center;font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
         <td style="text-align:right;">${fmt(qty)}</td>
         <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
         <td style="text-align:right;">${fmt(lessQty)}</td>
@@ -1244,7 +1247,7 @@ function buildMultiFactoryInvoiceHtml(buyerName, records) {
 <style>
 * { margin:0;padding:0;box-sizing:border-box; }
 body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
-.watermark-bg { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.12;z-index:0;pointer-events:none; }
+.watermark-bg { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.1;z-index:-10;pointer-events:none; }
 .watermark-bg img { width:100%;height:100%;object-fit:contain; }
 .header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
 .logo-img { width:90px;height:90px;object-fit:contain; }
@@ -1300,6 +1303,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <thead><tr>
       <th style="text-align:center;width:40px;">Sl No.</th>
       <th style="text-align:center;">Date</th>
+      <th style="text-align:center;">Tea Type</th>
       <th style="text-align:right;">Total QTY<br/>(kg)</th>
       <th style="text-align:right;">Less %</th>
       <th style="text-align:right;">Less QTY<br/>(kg)</th>
@@ -1311,7 +1315,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <tbody>
       ${dataRows}
       <tr class="total-row">
-        <td colspan="2" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
+        <td colspan="3" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
         <td style="text-align:right;"><strong>${fmt(grandTotalQty)}</strong></td>
         <td>&mdash;</td>
         <td style="text-align:right;"><strong>${fmt(grandLessQty)}</strong></td>
