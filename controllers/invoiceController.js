@@ -111,7 +111,7 @@ function buildInvoiceHtml(txn, payments) {
       <td><strong>${fmt(txn.netQty)}</strong></td>
       <td>${fmt(txn.ratePerKg)}</td>
       <td>${fmt(txn.grossAmount)}</td>
-      <td>${txn.teaType || '—'}</td>
+      <td>${txn.description || txn.teaType || '—'}</td>
       <td>${fmt(txn.netPayable)}</td>
       <td>${fmt(txn.advancePayment)}</td>
       <td><strong>${fmt(txn.finalPayable)}</strong></td>
@@ -633,7 +633,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
         <td><strong>${fmt(t.netQty)}</strong></td>
         <td>${fmt(t.ratePerKg)}</td>
         <td>${fmt(t.grossAmount)}</td>
-        <td>${t.teaType || '—'}</td>
+        <td>${t.description || t.teaType || '—'}</td>
         <td>${fmt(t.netPayable)}</td>
         <td>${fmt(t.advancePayment)}</td>
         <td><strong>${fmt(t.finalPayable)}</strong></td>
