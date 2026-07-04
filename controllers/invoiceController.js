@@ -972,48 +972,40 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
   }
 };
 
-// ── Shared PDF helper — production-safe (Railway / local) ─────────────────────
+// ── Shared PDF helper — uses system Chromium installed via Dockerfile ──────────
 async function generatePdf(html) {
-  const htmlPdf = require('html-pdf-node');
-  const options = {
-    format: 'A4',
-    margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
-    printBackground: true,
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-zygote','--single-process'],
-    timeout: 30000,
-  };
+  const puppeteer = require('puppeteer-core');
 
-  const fs = require('fs');
-  const execSync = require('child_process').execSync;
-  
-  const possiblePaths = [
-    process.env.PUPPETEER_EXECUTABLE_PATH,
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/google-chrome'
-  ];
-  
-  let foundPath = null;
-  for (const p of possiblePaths) {
-    if (p && fs.existsSync(p)) {
-      foundPath = p;
-      break;
-    }
-  }
+  // System chromium path set by Dockerfile ENV
+  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
-  // Fallback: Use OS 'which' command to find Nixpacks dynamic paths
-  if (!foundPath) {
-    try { foundPath = execSync('which chromium').toString().trim(); } catch (e) {}
-  }
-  if (!foundPath) {
-    try { foundPath = execSync('which chromium-browser').toString().trim(); } catch (e) {}
-  }
+  const browser = await puppeteer.launch({
+    executablePath,
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-extensions',
+    ],
+  });
 
-  if (foundPath) {
-    options.executablePath = foundPath;
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    const buffer = await page.pdf({
+      format: 'A4',
+      margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
+      printBackground: true,
+    });
+    return buffer;
+  } finally {
+    await browser.close();
   }
-
-  return htmlPdf.generatePdf({ content: html }, options);
 }
 
 // ── Build Factory Invoice HTML ─────────────────────────────────────────────────
