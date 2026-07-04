@@ -10,6 +10,7 @@ const factorySchema = new mongoose.Schema({
   date:            { type: Date, default: Date.now },
   buyer:           { type: mongoose.Schema.Types.ObjectId, ref: 'Buyer', index: true },
   buyerName:       { type: String, required: [true, 'Buyer name is required'], trim: true, index: true },
+  teaType:         { type: String, trim: true, default: 'CTC' },
   totalQuantity:   { type: Number, required: [true, 'Total quantity is required'], min: 0 },
   lessPercentage:  { type: Number, min: 0, default: 0 },
   rate:            { type: Number, required: [true, 'Rate is required'], min: 0 },

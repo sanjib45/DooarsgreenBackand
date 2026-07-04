@@ -5,6 +5,7 @@ const PAYMENT_MODES = ['Cash', 'Online', 'Cheque'];
 exports.createRules = [
   body('date').optional({ checkFalsy: true }).isISO8601().withMessage('Valid sale date required'),
   body('buyerName').trim().notEmpty().withMessage('Buyer name is required'),
+  body('teaType').optional({ checkFalsy: true }).isString(),
   body('totalQuantity').isFloat({ min: 0.001 }).withMessage('Total quantity must be a positive number'),
   // lessPercentage is optional (defaults to 0); when present must be 0–100
   body('lessPercentage').optional({ checkFalsy: true }).isFloat({ min: 0, max: 100 }).withMessage('Less percentage must be between 0 and 100'),
@@ -18,6 +19,7 @@ exports.createRules = [
 exports.updateRules = [
   body('date').optional({ checkFalsy: true }).isISO8601(),
   body('buyerName').optional().trim().notEmpty(),
+  body('teaType').optional({ checkFalsy: true }).isString(),
   body('totalQuantity').optional().isFloat({ min: 0 }),
   body('lessPercentage').optional({ checkFalsy: true }).isFloat({ min: 0, max: 100 }),
   body('rate').optional().isFloat({ min: 0 }),
