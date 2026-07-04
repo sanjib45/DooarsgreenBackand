@@ -94,6 +94,7 @@ const merchantTransactionSchema = new mongoose.Schema(
     balance:           { type: Number, default: 0 },
 
     notes: { type: String, maxlength: 500, trim: true },
+    description: { type: String, maxlength: 500, trim: true },
   },
   { timestamps: true }
 );
