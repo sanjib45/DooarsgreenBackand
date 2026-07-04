@@ -982,9 +982,37 @@ async function generatePdf(html) {
     args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-zygote','--single-process'],
     timeout: 30000,
   };
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    options.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+
+  const fs = require('fs');
+  const execSync = require('child_process').execSync;
+  
+  const possiblePaths = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome'
+  ];
+  
+  let foundPath = null;
+  for (const p of possiblePaths) {
+    if (p && fs.existsSync(p)) {
+      foundPath = p;
+      break;
+    }
   }
+
+  // Fallback: Use OS 'which' command to find Nixpacks dynamic paths
+  if (!foundPath) {
+    try { foundPath = execSync('which chromium').toString().trim(); } catch (e) {}
+  }
+  if (!foundPath) {
+    try { foundPath = execSync('which chromium-browser').toString().trim(); } catch (e) {}
+  }
+
+  if (foundPath) {
+    options.executablePath = foundPath;
+  }
+
   return htmlPdf.generatePdf({ content: html }, options);
 }
 
