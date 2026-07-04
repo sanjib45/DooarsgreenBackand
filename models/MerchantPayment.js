@@ -15,7 +15,6 @@ const merchantPaymentSchema = new mongoose.Schema(
     merchant: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Merchant',
-      required: [true, 'Merchant reference is required'],
       index: true,
     },
     paymentId: {

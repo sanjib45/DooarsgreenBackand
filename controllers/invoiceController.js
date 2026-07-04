@@ -89,11 +89,11 @@ function buildInvoiceHtml(txn, payments) {
 
   // Build payment rows
   const paymentRows = payments.length === 0
-    ? `<tr><td colspan="11" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
+    ? `<tr><td colspan="12" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
     : payments.map((p, i) => `
         <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
           <td>${fmtDate(p.paymentDate)}</td>
-          <td colspan="5" style="text-align: right; padding-right: 15px; font-style: italic; color: #555;">Payment (${p.paymentMode || 'Cash'})</td>
+          <td colspan="6" style="text-align: right; padding-right: 15px; font-style: italic; color: #555;">Payment (${p.paymentMode || 'Cash'})</td>
           <td>${p.notes || '—'}</td>
           <td>—</td>
           <td>${p.paymentMode === 'Cash' ? fmt(p.amount) : '—'}</td>
@@ -103,7 +103,7 @@ function buildInvoiceHtml(txn, payments) {
 
   const txnRow = `
     <tr class="row-even">
-      <td>${fmtDate(txn.transactionDate)}<br><small>${txn.teaType || ''}</small></td>
+      <td>${fmtDate(txn.transactionDate)}</td>
       <td>${fmt(txn.grossQty)}</td>
       <td>${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '—'}</td>
       <td>${fmt(txn.lessQty)}</td>
@@ -111,6 +111,7 @@ function buildInvoiceHtml(txn, payments) {
       <td><strong>${fmt(txn.netQty)}</strong></td>
       <td>${fmt(txn.ratePerKg)}</td>
       <td>${fmt(txn.grossAmount)}</td>
+      <td>${txn.teaType || '—'}</td>
       <td>${fmt(txn.netPayable)}</td>
       <td>${fmt(txn.advancePayment)}</td>
       <td><strong>${fmt(txn.finalPayable)}</strong></td>
@@ -126,6 +127,7 @@ function buildInvoiceHtml(txn, payments) {
       <td><strong>${fmt(txn.netQty)}</strong></td>
       <td>—</td>
       <td>${fmt(txn.grossAmount)}</td>
+      <td>—</td>
       <td>${fmt(txn.netPayable)}</td>
       <td>${fmt(txn.advancePayment)}</td>
       <td class="total-amount">${fmt(txn.finalPayable)}</td>
@@ -460,16 +462,18 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <thead>
       <tr>
         <th>DATE</th>
-        <th>GROSS (kg)</th>
+        <th>QTY (KG)</th>
         <th>LESS %</th>
-        <th>LESS (kg)</th>
+        <th>LESS (KG)</th>
         <th>FINE LEAF %</th>
-        <th>NET (kg)</th>
+        <th>Net QTY</th>
         <th>RATE</th>
         <th>AMOUNT</th>
-        <th>PAYABLE</th>
+        <th>DESCRIPTION</th>
+        <th>NET PAYABLE</th>
         <th>ADVANCE</th>
         <th>TOTAL</th>
+      </tr>
     </thead>
     <tbody>
 
@@ -564,25 +568,15 @@ exports.generateInvoice = async (req, res) => {
       return res.setHeader('Content-Type', 'text/html').send(html);
     }
 
-    // ── PDF generation via html-pdf-node ─────────────────────────────────────
-    const htmlPdf = require('html-pdf-node');
-
-    const options = {
-      format:          'A4',
-      margin:          { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
-      printBackground: true,
-    };
-
-    const file   = { content: html };
-    const buffer = await htmlPdf.generatePdf(file, options);
-
+    // ── PDF generation ────────────────────────────────────────────────────────
+    const buffer = await generatePdf(html);
     const safeFilename = `invoice-${txn.transactionId || id}-${Date.now()}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${safeFilename}"`);
     res.send(buffer);
 
   } catch (err) {
-    console.error('[invoiceController.generateInvoice] Error:', err.message);
+    console.error('[invoiceController.generateInvoice] Error:', err.message, err.stack);
     res.status(500).json({ success: false, message: 'Failed to generate invoice: ' + err.message });
   }
 };
@@ -622,7 +616,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
     const paymentSubRows = payments.map((p) => `
       <tr class="row-even" style="font-style: italic; color: #444; background: #fafafa;">
         <td>${fmtDate(p.paymentDate)}</td>
-        <td colspan="6" style="text-align: right; padding-right: 15px;">Payment (${p.paymentMode || 'Cash'})</td>
+        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.paymentMode || 'Cash'})</td>
         <td>${p.notes || '—'}</td>
         <td>—</td>
         <td>—</td>
@@ -631,7 +625,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
 
     return `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-        <td>${fmtDate(t.transactionDate)}<br><small>${t.teaType || ''}</small></td>
+        <td>${fmtDate(t.transactionDate)}</td>
         <td>${fmt(t.grossQty)}</td>
         <td>${t.lessPercent > 0 ? `${t.lessPercent}%` : '—'}</td>
         <td>${fmt(t.lessQty)}</td>
@@ -639,6 +633,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
         <td><strong>${fmt(t.netQty)}</strong></td>
         <td>${fmt(t.ratePerKg)}</td>
         <td>${fmt(t.grossAmount)}</td>
+        <td>${t.teaType || '—'}</td>
         <td>${fmt(t.netPayable)}</td>
         <td>${fmt(t.advancePayment)}</td>
         <td><strong>${fmt(t.finalPayable)}</strong></td>
@@ -783,14 +778,15 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <thead>
       <tr>
         <th>DATE</th>
-        <th>GROSS (kg)</th>
+        <th>QTY (KG)</th>
         <th>LESS %</th>
-        <th>LESS (kg)</th>
+        <th>LESS (KG)</th>
         <th>FINE LEAF %</th>
-        <th>NET (kg)</th>
+        <th>Net QTY</th>
         <th>RATE</th>
         <th>AMOUNT</th>
-        <th>PAYABLE</th>
+        <th>DESCRIPTION</th>
+        <th>NET PAYABLE</th>
         <th>ADVANCE</th>
         <th>TOTAL</th>
       </tr>
@@ -810,6 +806,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
         <td>—</td>
         <td>—</td>
         <td>${fmt(totals.grossAmount)}</td>
+        <td>—</td>
         <td>${fmt(totals.netPayable)}</td>
         <td>${fmt(totals.advancePayment)}</td>
         <td class="total-amount">${fmt(totals.finalPayable)}</td>
@@ -961,17 +958,8 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
       return res.setHeader('Content-Type', 'text/html').send(html);
     }
 
-    // ── PDF via html-pdf-node ─────────────────────────────────────────────────
-    const htmlPdf = require('html-pdf-node');
-    const options = {
-      format:          'A4',
-      margin:          { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
-      printBackground: true,
-    };
-
-    const file   = { content: html };
-    const buffer = await htmlPdf.generatePdf(file, options);
-
+    // ── PDF via shared helper (production-safe) ──────────────────────────────
+    const buffer = await generatePdf(html);
     const safeName = merchantName.replace(/\s+/g, '_').toUpperCase();
     const safeDate = (finalStart === finalEnd) ? finalStart.replace(/-/g, '') : `${finalStart.replace(/-/g, '')}_${finalEnd.replace(/-/g, '')}`;
     res.setHeader('Content-Type', 'application/pdf');
@@ -981,5 +969,419 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
   } catch (err) {
     console.error('[invoiceController.generateInvoiceByMerchantDate] Error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to generate invoice: ' + err.message });
+  }
+};
+
+// ── Shared PDF helper — production-safe (Railway / local) ─────────────────────
+async function generatePdf(html) {
+  const htmlPdf = require('html-pdf-node');
+  const options = {
+    format: 'A4',
+    margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
+    printBackground: true,
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--no-first-run','--no-zygote','--single-process'],
+    timeout: 30000,
+  };
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    options.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+  return htmlPdf.generatePdf({ content: html }, options);
+}
+
+// ── Build Factory Invoice HTML ─────────────────────────────────────────────────
+function buildFactoryInvoiceHtml(record) {
+  const logoImg = LOGO_BASE64
+    ? `<img src="${LOGO_BASE64}" alt="logo" class="logo-img" />`
+    : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
+
+  const qty       = record.totalQuantity  || 0;
+  const lessPct   = record.lessPercentage || 0;
+  const lessQty   = parseFloat(((qty * lessPct) / 100).toFixed(2));
+  const netQty    = parseFloat((qty - lessQty).toFixed(2));
+  const fine      = record.fineLeaf       || 0;
+  const rate      = record.rate           || 0;
+  const totalAmt  = parseFloat((netQty * rate).toFixed(2));
+  const advance   = record.advance        || 0;
+  const totalPaid = (record.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+  const due       = parseFloat((totalAmt - advance - totalPaid).toFixed(2));
+  const invoiceDate = fmtDateLong(record.date || record.createdAt);
+  const invoiceNo   = String(record._id).slice(-6).toUpperCase();
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />
+<title>Factory Invoice - ${record.buyerName || ''}</title>
+<style>
+* { margin:0;padding:0;box-sizing:border-box; }
+body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
+.watermark-bg { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.12;z-index:0;pointer-events:none; }
+.watermark-bg img { width:100%;height:100%;object-fit:contain; }
+.header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
+.logo-img { width:90px;height:90px;object-fit:contain; }
+.logo-placeholder { width:90px;height:90px;background:#2d6a2d;color:#fff;font-weight:bold;font-size:10px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:4px;line-height:1.3; }
+.header-right { text-align:right; }
+.voucher-title { font-size:15px;font-weight:900;color:#2d6a2d;letter-spacing:0.5px;text-transform:uppercase; }
+.invoice-date { font-size:13px;color:#333;margin:3px 0; }
+.invoice-no { font-size:14px;font-weight:800;color:#1a1a1a;text-transform:uppercase; }
+.billed-section { margin-bottom:14px;position:relative;z-index:1; }
+.billed-label { font-size:12px;font-weight:900;color:#2d6a2d;text-transform:uppercase;margin-bottom:4px; }
+.billed-name { font-size:13px;font-weight:700;text-transform:uppercase;color:#111; }
+.billed-detail { font-size:11px;color:#444; }
+hr { border:none;border-top:1.5px solid #2d6a2d;margin:10px 0; }
+.table-wrapper { position:relative;z-index:1;overflow-x:auto; }
+table { width:100%;border-collapse:collapse;font-size:10.5px; }
+thead tr { background:#2d6a2d;color:#fff; }
+thead th { padding:8px 6px;text-align:center;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.3px; }
+tbody td { padding:7px 6px;text-align:center;border-bottom:1px solid #e0e0e0; }
+.row-even { background:#fafafa; } .row-odd { background:#f0f7f0; }
+.total-row td { background:#f0f7f0;font-weight:700;border-top:2px solid #2d6a2d;border-bottom:2px solid #2d6a2d; }
+.total-amount { color:#2d6a2d;font-size:12px;font-weight:900; }
+.summary-box { margin:14px 0;display:flex;flex-direction:column;gap:6px;position:relative;z-index:1; }
+.summary-row { display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-radius:4px; }
+.summary-row.gross   { background:#f0f7f0;border:1px solid #2d6a2d; }
+.summary-row.advance { background:#fff8ec;border:1px solid #e8c95a; }
+.summary-row.due-row { background:${due > 0 ? '#fff1f1' : '#f0fff0'};border:1px solid ${due > 0 ? '#c0392b' : '#2d6a2d'}; }
+.summary-label { font-weight:700;font-size:11px;color:#333;text-transform:uppercase; }
+.summary-value { font-weight:900;font-size:13px; }
+.amount-words { background:#f5fff5;border:1.5px solid #2d6a2d;border-radius:3px;padding:8px 12px;font-size:11.5px;font-weight:800;color:#1a4f1a;text-transform:uppercase;letter-spacing:0.3px;margin:10px 0;position:relative;z-index:1; }
+.footer-company { margin-top:8px;padding-top:8px;border-top:1.5px solid #2d6a2d;position:relative;z-index:1; }
+.footer-company .company-name { font-size:13px;font-weight:900;color:#2d6a2d;text-transform:uppercase; }
+.footer-company .contact { font-size:10px;color:#444;margin-top:2px; }
+.signatures { display:flex;justify-content:space-between;margin-top:40px;position:relative;z-index:1; }
+.sig-block { text-align:center;width:200px; }
+.sig-line { border-top:1.5px solid #333;margin-bottom:5px; }
+.sig-label { font-size:11px;color:#333;font-weight:600; }
+@media print { body { padding:10px 15px; } }
+</style></head><body>
+${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="watermark" /></div>` : ''}
+<div class="header">
+  <div class="logo-col">${logoImg}</div>
+  <div class="header-right">
+    <div class="voucher-title">DOOARS GREEN FPO &mdash; FACTORY INVOICE</div>
+    <div class="invoice-date">${invoiceDate}</div>
+    <div class="invoice-no">INVOICE NO. FCT-${invoiceNo}</div>
+  </div>
+</div>
+<div class="billed-section">
+  <div class="billed-label">BUYER / PARTY:</div>
+  <div class="billed-name">${record.buyerName || '&mdash;'}</div>
+  <div class="billed-detail">DATE &ndash; ${fmtDate(record.date)}</div>
+  ${record.remarks ? `<div class="billed-detail">REMARKS &ndash; ${record.remarks}</div>` : ''}
+</div>
+<hr />
+<div class="table-wrapper">
+  <table>
+    <thead><tr>
+      <th style="text-align:center;width:40px;">Sl No.</th>
+      <th style="text-align:center;">Date</th>
+      <th style="text-align:right;">Total QTY<br/>(kg)</th>
+      <th style="text-align:right;">Less %</th>
+      <th style="text-align:right;">Less QTY<br/>(kg)</th>
+      <th style="text-align:right;">Net QNTY<br/>(kg)</th>
+      <th style="text-align:right;">Fine %</th>
+      <th style="text-align:right;">Rate<br/>(&#8377;/kg)</th>
+      <th style="text-align:right;">Total AMT.<br/>(&#8377;)</th>
+    </tr></thead>
+    <tbody>
+      <tr class="row-even">
+        <td style="text-align:center;">1</td>
+        <td style="text-align:center;">${fmtDate(record.date)}</td>
+        <td style="text-align:right;">${fmt(qty)}</td>
+        <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
+        <td style="text-align:right;">${fmt(lessQty)}</td>
+        <td style="text-align:right;font-weight:bold;color:#2d6a2d;">${fmt(netQty)}</td>
+        <td style="text-align:right;">${fine > 0 ? fine + '%' : '&mdash;'}</td>
+        <td style="text-align:right;">${fmt(rate)}</td>
+        <td style="text-align:right;font-weight:bold;">&#8377;${fmt(totalAmt)}</td>
+      </tr>
+      ${(record.payments || []).map(p => `
+      <tr class="row-odd" style="font-style: italic; color: #444; background: #fafafa;">
+        <td style="text-align:center;"></td>
+        <td style="text-align:center;">${fmtDate(p.date)}</td>
+        <td colspan="6" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
+        <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
+      </tr>`).join('')}
+      <tr class="total-row">
+        <td colspan="3" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
+        <td>&mdash;</td>
+        <td style="text-align:right;"><strong>${fmt(lessQty)}</strong></td>
+        <td style="text-align:right;"><strong>${fmt(netQty)}</strong></td>
+        <td>&mdash;</td>
+        <td>&mdash;</td>
+        <td class="total-amount" style="text-align:right;">&#8377;${fmt(totalAmt)}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div class="summary-box">
+  <div class="summary-row gross">
+    <span class="summary-label">Total Amount</span>
+    <span class="summary-value" style="color:#2d6a2d;">&#8377;${fmt(totalAmt)}</span>
+  </div>
+  ${advance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">- &#8377;${fmt(advance)}</span></div>` : ''}
+  ${totalPaid > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">- &#8377;${fmt(totalPaid)}</span></div>` : ''}
+  <div class="summary-row due-row">
+    <span class="summary-label">${due > 0 ? 'Balance Due' : 'Status'}</span>
+    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#2d6a2d'};">${due > 0 ? '&#8377;' + fmt(due) : '&#10003; CLEARED'}</span>
+  </div>
+</div>
+<div class="amount-words">TOTAL AMOUNT &gt; ${numberToWords(totalAmt)}</div>
+<hr />
+<div class="footer-company">
+  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
+  <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
+</div>
+<div class="signatures">
+  <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Authorized By</div></div>
+  <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Received By</div></div>
+</div>
+</body></html>`;
+}
+
+// ── Controller: Factory Invoice ────────────────────────────────────────────────
+/**
+ * GET /api/factory/:id/invoice
+ * GET /api/factory/:id/invoice?format=html   (browser preview)
+ * NEW function — does NOT modify any existing controller.
+ */
+exports.generateFactoryInvoice = async (req, res) => {
+  try {
+    const { id }  = req.params;
+    const format  = (req.query.format || 'pdf').toLowerCase();
+    const Factory = require('../models/Factory');
+
+    console.log(`[invoiceController.generateFactoryInvoice] id=${id} format=${format}`);
+
+    const record = await Factory.findById(id);
+    if (!record) {
+      return res.status(404).json({ success: false, message: 'Factory record not found' });
+    }
+
+    const html = buildFactoryInvoiceHtml(record.toObject({ virtuals: true }));
+
+    if (format === 'html') {
+      return res.setHeader('Content-Type', 'text/html').send(html);
+    }
+
+    const buffer    = await generatePdf(html);
+    const safeBuyer = (record.buyerName || 'factory').replace(/\s+/g, '_').toUpperCase();
+    const safeDate  = fmtDate(record.date).replace(/\//g, '-');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="factory-invoice-${safeBuyer}-${safeDate}.pdf"`);
+    res.send(buffer);
+
+  } catch (err) {
+    console.error('[invoiceController.generateFactoryInvoice] Error:', err.message, err.stack);
+    res.status(500).json({ success: false, message: 'Failed to generate factory invoice: ' + err.message });
+  }
+};
+
+// ── Build Multi-Record Factory Invoice HTML ──────────────────────────────────
+function buildMultiFactoryInvoiceHtml(buyerName, records) {
+  const logoImg = LOGO_BASE64
+    ? `<img src="${LOGO_BASE64}" alt="logo" class="logo-img" />`
+    : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
+
+  const invoiceDate = fmtDateLong(new Date());
+  
+  let grandTotalQty = 0;
+  let grandLessQty = 0;
+  let grandNetQty = 0;
+  let grandTotalAmt = 0;
+  let grandAdvance = 0;
+  let grandPaid = 0;
+
+  const dataRows = records.map((record, i) => {
+    const qty       = record.totalQuantity  || 0;
+    const lessPct   = record.lessPercentage || 0;
+    const lessQty   = parseFloat(((qty * lessPct) / 100).toFixed(2));
+    const netQty    = parseFloat((qty - lessQty).toFixed(2));
+    const fine      = record.fineLeaf       || 0;
+    const rate      = record.rate           || 0;
+    const totalAmt  = parseFloat((netQty * rate).toFixed(2));
+    const advance   = record.advance        || 0;
+    const totalPaid = (record.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
+    
+    grandTotalQty += qty;
+    grandLessQty += lessQty;
+    grandNetQty += netQty;
+    grandTotalAmt += totalAmt;
+    grandAdvance += advance;
+    grandPaid += totalPaid;
+
+    // Create sub-rows for payments
+    const payments = record.payments || [];
+    const paymentRows = payments.map(p => `
+      <tr class="row-even" style="font-style: italic; color: #444; background: #fafafa;">
+        <td style="text-align:center;"></td>
+        <td style="text-align:center;">${fmtDate(p.date)}</td>
+        <td colspan="6" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
+        <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
+        <td style="text-align:center;">${i + 1}</td>
+        <td style="text-align:center;">${fmtDate(record.date)}</td>
+        <td style="text-align:right;">${fmt(qty)}</td>
+        <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
+        <td style="text-align:right;">${fmt(lessQty)}</td>
+        <td style="text-align:right;font-weight:bold;color:#2d6a2d;">${fmt(netQty)}</td>
+        <td style="text-align:right;">${fine > 0 ? fine + '%' : '&mdash;'}</td>
+        <td style="text-align:right;">${fmt(rate)}</td>
+        <td style="text-align:right;font-weight:bold;">&#8377;${fmt(totalAmt)}</td>
+      </tr>
+      ${paymentRows}
+    `;
+  }).join('');
+
+  const due = parseFloat((grandTotalAmt - grandAdvance - grandPaid).toFixed(2));
+
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />
+<title>Factory Statement - ${buyerName}</title>
+<style>
+* { margin:0;padding:0;box-sizing:border-box; }
+body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
+.watermark-bg { position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.12;z-index:0;pointer-events:none; }
+.watermark-bg img { width:100%;height:100%;object-fit:contain; }
+.header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
+.logo-img { width:90px;height:90px;object-fit:contain; }
+.logo-placeholder { width:90px;height:90px;background:#2d6a2d;color:#fff;font-weight:bold;font-size:10px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:4px;line-height:1.3; }
+.header-right { text-align:right; }
+.voucher-title { font-size:15px;font-weight:900;color:#2d6a2d;letter-spacing:0.5px;text-transform:uppercase; }
+.invoice-date { font-size:13px;color:#333;margin:3px 0; }
+.invoice-no { font-size:14px;font-weight:800;color:#1a1a1a;text-transform:uppercase; }
+.billed-section { margin-bottom:14px;position:relative;z-index:1; }
+.billed-label { font-size:12px;font-weight:900;color:#2d6a2d;text-transform:uppercase;margin-bottom:4px; }
+.billed-name { font-size:13px;font-weight:700;text-transform:uppercase;color:#111; }
+hr { border:none;border-top:1.5px solid #2d6a2d;margin:10px 0; }
+.table-wrapper { position:relative;z-index:1;overflow-x:auto; }
+table { width:100%;border-collapse:collapse;font-size:10.5px; }
+thead tr { background:#2d6a2d;color:#fff; }
+thead th { padding:8px 6px;text-align:center;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.3px; }
+tbody td { padding:7px 6px;text-align:center;border-bottom:1px solid #e0e0e0; }
+.row-even { background:#fafafa; } .row-odd { background:#f0f7f0; }
+.total-row td { background:#f0f7f0;font-weight:700;border-top:2px solid #2d6a2d;border-bottom:2px solid #2d6a2d; }
+.total-amount { color:#2d6a2d;font-size:12px;font-weight:900; }
+.summary-box { margin:14px 0;display:flex;flex-direction:column;gap:6px;position:relative;z-index:1; }
+.summary-row { display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-radius:4px; }
+.summary-row.gross   { background:#f0f7f0;border:1px solid #2d6a2d; }
+.summary-row.advance { background:#fff8ec;border:1px solid #e8c95a; }
+.summary-row.due-row { background:${due > 0 ? '#fff1f1' : '#f0fff0'};border:1px solid ${due > 0 ? '#c0392b' : '#2d6a2d'}; }
+.summary-label { font-weight:700;font-size:11px;color:#333;text-transform:uppercase; }
+.summary-value { font-weight:900;font-size:13px; }
+.amount-words { background:#f5fff5;border:1.5px solid #2d6a2d;border-radius:3px;padding:8px 12px;font-size:11.5px;font-weight:800;color:#1a4f1a;text-transform:uppercase;letter-spacing:0.3px;margin:10px 0;position:relative;z-index:1; }
+.footer-company { margin-top:8px;padding-top:8px;border-top:1.5px solid #2d6a2d;position:relative;z-index:1; }
+.footer-company .company-name { font-size:13px;font-weight:900;color:#2d6a2d;text-transform:uppercase; }
+.footer-company .contact { font-size:10px;color:#444;margin-top:2px; }
+.signatures { display:flex;justify-content:space-between;margin-top:40px;position:relative;z-index:1; }
+.sig-block { text-align:center;width:200px; }
+.sig-line { border-top:1.5px solid #333;margin-bottom:5px; }
+.sig-label { font-size:11px;color:#333;font-weight:600; }
+@media print { body { padding:10px 15px; } }
+</style></head><body>
+${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="watermark" /></div>` : ''}
+<div class="header">
+  <div class="logo-col">${logoImg}</div>
+  <div class="header-right">
+    <div class="voucher-title">DOOARS GREEN FPO &mdash; FACTORY STATEMENT</div>
+    <div class="invoice-date">${invoiceDate}</div>
+  </div>
+</div>
+<div class="billed-section">
+  <div class="billed-label">BUYER / PARTY:</div>
+  <div class="billed-name">${buyerName}</div>
+</div>
+<hr />
+<div class="table-wrapper">
+  <table>
+    <thead><tr>
+      <th style="text-align:center;width:40px;">Sl No.</th>
+      <th style="text-align:center;">Date</th>
+      <th style="text-align:right;">Total QTY<br/>(kg)</th>
+      <th style="text-align:right;">Less %</th>
+      <th style="text-align:right;">Less QTY<br/>(kg)</th>
+      <th style="text-align:right;">Net QNTY<br/>(kg)</th>
+      <th style="text-align:right;">Fine %</th>
+      <th style="text-align:right;">Rate<br/>(&#8377;/kg)</th>
+      <th style="text-align:right;">Total AMT.<br/>(&#8377;)</th>
+    </tr></thead>
+    <tbody>
+      ${dataRows}
+      <tr class="total-row">
+        <td colspan="2" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
+        <td style="text-align:right;"><strong>${fmt(grandTotalQty)}</strong></td>
+        <td>&mdash;</td>
+        <td style="text-align:right;"><strong>${fmt(grandLessQty)}</strong></td>
+        <td style="text-align:right;color:#2d6a2d;"><strong>${fmt(grandNetQty)}</strong></td>
+        <td>&mdash;</td>
+        <td>&mdash;</td>
+        <td class="total-amount" style="text-align:right;">&#8377;${fmt(grandTotalAmt)}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div class="summary-box">
+  <div class="summary-row gross">
+    <span class="summary-label">Total Amount</span>
+    <span class="summary-value" style="color:#2d6a2d;">&#8377;${fmt(grandTotalAmt)}</span>
+  </div>
+  ${grandAdvance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">- &#8377;${fmt(grandAdvance)}</span></div>` : ''}
+  ${grandPaid > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">- &#8377;${fmt(grandPaid)}</span></div>` : ''}
+  <div class="summary-row due-row">
+    <span class="summary-label">${due > 0 ? 'Balance Due' : 'Status'}</span>
+    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#2d6a2d'};">${due > 0 ? '&#8377;' + fmt(due) : '&#10003; CLEARED'}</span>
+  </div>
+</div>
+<div class="amount-words">TOTAL AMOUNT &gt; ${numberToWords(grandTotalAmt)}</div>
+<hr />
+<div class="footer-company">
+  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
+  <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
+</div>
+<div class="signatures">
+  <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Authorized By</div></div>
+  <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Received By</div></div>
+</div>
+</body></html>`;
+}
+
+// ── Controller: Factory Multi-Invoice By Buyer ─────────────────────────────────
+exports.generateFactoryInvoiceByBuyer = async (req, res) => {
+  try {
+    const { buyerName } = req.query;
+    const format = (req.query.format || 'pdf').toLowerCase();
+    
+    if (!buyerName) {
+      return res.status(400).json({ success: false, message: 'buyerName is required' });
+    }
+
+    const Factory = require('../models/Factory');
+    const records = await Factory.find({ 
+      buyerName: { $regex: new RegExp(`^${buyerName.trim()}$`, 'i') } 
+    }).sort('date').lean({ virtuals: true });
+
+    if (!records || records.length === 0) {
+      return res.status(404).json({ success: false, message: 'No records found for this buyer' });
+    }
+
+    const html = buildMultiFactoryInvoiceHtml(buyerName, records);
+
+    if (format === 'html') {
+      return res.setHeader('Content-Type', 'text/html').send(html);
+    }
+
+    const buffer = await generatePdf(html);
+    const safeBuyer = buyerName.replace(/\s+/g, '_').toUpperCase();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="factory-statement-${safeBuyer}-${Date.now()}.pdf"`);
+    res.send(buffer);
+
+  } catch (err) {
+    console.error('[invoiceController.generateFactoryInvoiceByBuyer] Error:', err.message, err.stack);
+    res.status(500).json({ success: false, message: 'Failed to generate factory statement: ' + err.message });
   }
 };
