@@ -974,15 +974,32 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
 
 // ── Shared PDF helper — uses system Chromium installed via Dockerfile ──────────
 async function generatePdf(html) {
-  const puppeteer = require('puppeteer-core');
+  // puppeteer-core v21+ is ESM-only — use dynamic import() instead of require()
+  const { default: puppeteer } = await import('puppeteer-core');
+  let sparticuz;
+  try {
+    sparticuz = (await import('@sparticuz/chromium')).default;
+  } catch (err) {
+    console.warn("Could not load @sparticuz/chromium");
+  }
 
   // System chromium path set by Dockerfile ENV
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+  let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+
+  if (!executablePath) {
+    if (process.platform === 'win32') {
+      executablePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    } else if (sparticuz) {
+      executablePath = await sparticuz.executablePath();
+    } else {
+      executablePath = '/usr/bin/chromium';
+    }
+  }
 
   const browser = await puppeteer.launch({
     executablePath,
-    headless: true,
-    args: [
+    headless: sparticuz ? sparticuz.headless : true,
+    args: sparticuz ? sparticuz.args : [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
@@ -997,12 +1014,13 @@ async function generatePdf(html) {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
-    const buffer = await page.pdf({
+    const pdfData = await page.pdf({
       format: 'A4',
       margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
       printBackground: true,
     });
-    return buffer;
+    // puppeteer-core v25+ returns Uint8Array; wrap in Buffer for Express
+    return Buffer.from(pdfData);
   } finally {
     await browser.close();
   }
