@@ -1,5 +1,6 @@
 [phases.setup]
 aptPkgs = [
+    "chromium",
     "wget",
     "ca-certificates",
     "fonts-liberation",
@@ -38,3 +39,13 @@ aptPkgs = [
     "lsb-release",
     "xdg-utils"
 ]
+
+[phases.build]
+cmds = ["npm install --production"]
+
+[start]
+cmd = "node server.js"
+
+[variables]
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PUPPETEER_EXECUTABLE_PATH = "/usr/bin/chromium"
