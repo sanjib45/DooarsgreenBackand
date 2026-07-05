@@ -908,10 +908,10 @@ async function generatePdf(html) {
     '--disable-extensions',
     '--font-render-hinting=none',
   ];
-  let headlessMode = 'new';   // puppeteer v21+
+  let headlessMode = true;   // For puppeteer v22+, use true or 'shell'. 'new' is deprecated and crashes on unsupported Linux containers via DBUS request.
 
-  // Only use sparticus automatically if we are on Vercel or AWS, because on local Windows it crashes.
-  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
+  // Only use sparticus automatically on Linux/Serverless environments because it crashes on Windows development servers.
+  const isServerless = process.platform !== 'win32';
 
   if (!executablePath && isServerless) {
     try {
