@@ -33,6 +33,13 @@ const merchantTransactionSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    // Denormalized phone — stored for fast phone-based filtering without join
+    merchantPhone: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
     teaType: {
       type: String,
       required: [true, 'Tea type is required'],
@@ -187,8 +194,12 @@ merchantTransactionSchema.methods._recalculate = function () {
 // Expose helper for controller use (create/update without save)
 merchantTransactionSchema.statics.computeFields = computeFields;
 
-// ── Compound indexes for fast queries ─────────────────────────────────────────
+// ── Compound indexes for fast queries (all filter combinations) ───────────────
+merchantTransactionSchema.index({ merchantName: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ merchantPhone: 1, transactionDate: -1 });
 merchantTransactionSchema.index({ merchant: 1, transactionDate: -1 });
 merchantTransactionSchema.index({ transactionDate: -1 });
+merchantTransactionSchema.index({ teaType: 1, transactionDate: -1 });
+
 
 module.exports = mongoose.model('MerchantTransaction', merchantTransactionSchema);

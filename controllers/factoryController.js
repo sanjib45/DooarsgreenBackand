@@ -1,30 +1,92 @@
 const Factory = require('../models/Factory');
+const Buyer   = require('../models/Buyer');
 const { validationResult } = require('express-validator');
 
-// GET /api/factory — list all with optional search/pagination
+/**
+ * GET /api/factory
+ * Supports combined AND filtering:
+ *   search    – partial, case-insensitive match on buyerName OR buyer.phone
+ *   name      – filter by buyerName only
+ *   phone     – filter by linked buyer phone only
+ *   startDate / endDate – inclusive date range on `date` field
+ */
 exports.getAll = async (req, res) => {
   try {
-    const { search, startDate, endDate, sort = '-date', page = 1, limit = 50 } = req.query;
-    const filter = {};
-    if (search) filter.buyerName = { $regex: search, $options: 'i' };
+    const {
+      search, name, phone,
+      startDate, endDate,
+      sort = '-date',
+      page = 1, limit = 50,
+    } = req.query;
 
-    if (startDate || endDate) {
-      filter.date = {};
-      if (startDate) filter.date.$gte = new Date(startDate);
-      if (endDate) {
-        const ed = new Date(endDate);
-        ed.setUTCHours(23, 59, 59, 999);
-        filter.date.$lte = ed;
+    const andConditions = [];
+
+    // ── Name / phone search ──────────────────────────────────────────────────
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+
+      // Find buyer IDs whose phone matches the search term
+      const matchedBuyers = await Buyer.find({ phone: regex }).select('_id').lean();
+      const buyerIds = matchedBuyers.map(b => b._id);
+
+      const orClause = [{ buyerName: regex }];
+      if (buyerIds.length > 0) orClause.push({ buyer: { $in: buyerIds } });
+
+      andConditions.push({ $or: orClause });
+    }
+
+    // Explicit name filter (additive)
+    if (name && name.trim()) {
+      andConditions.push({
+        buyerName: { $regex: name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' },
+      });
+    }
+
+    // Explicit phone filter — look up buyers with this phone first
+    if (phone && phone.trim()) {
+      const phoneRegex = new RegExp(phone.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      const matchedByPhone = await Buyer.find({ phone: phoneRegex }).select('_id').lean();
+      const ids = matchedByPhone.map(b => b._id);
+      if (ids.length > 0) {
+        andConditions.push({ buyer: { $in: ids } });
+      } else {
+        // Phone not found → return empty result (don't skip filter)
+        return res.json({
+          success: true, data: [],
+          pagination: { total: 0, page: parseInt(page), pages: 0 },
+        });
       }
     }
 
+    // ── Date range filter ────────────────────────────────────────────────────
+    if (startDate || endDate) {
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) {
+        const ed = new Date(endDate);
+        ed.setUTCHours(23, 59, 59, 999);
+        dateFilter.$lte = ed;
+      }
+      andConditions.push({ date: dateFilter });
+    }
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [items, total] = await Promise.all([
-      Factory.find(filter).sort(sort).skip(skip).limit(parseInt(limit)),
+      Factory.find(filter).populate('buyer', 'name phone').sort(sort).skip(skip).limit(parseInt(limit)).lean({ virtuals: true }),
       Factory.countDocuments(filter),
     ]);
-    res.json({ success: true, data: items, pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) } });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+
+    res.json({
+      success: true,
+      data: items,
+      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
+    });
+  } catch (err) {
+    console.error('[factoryController.getAll]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
 };
 
 // GET /api/factory/stats

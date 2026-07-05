@@ -1,12 +1,15 @@
 /**
  * invoiceController.js
  * ──────────────────────────────────────────────────────────────────────────────
- * Generates a printable PDF invoice (DOOARS GREEN FPO PAYMENT VOUCHER) for a
- * given MerchantTransaction, including all linked MerchantPayment records.
+ * Generates printable PDF invoices (DOOARS GREEN FPO PAYMENT VOUCHER).
  *
- * Route:
- *   GET /api/merchant-transactions/:id/invoice
- *   GET /api/merchant-transactions/:id/invoice?format=html   (preview in browser)
+ * FIXES in this version:
+ *  ✅ ₹ symbol: use &#x20B9; HTML entity (safe across all PDF renderers)
+ *  ✅ Table headers: all single-line with white-space:nowrap
+ *  ✅ Column alignment: numbers right-aligned, text center/left
+ *  ✅ Watermark: uses fixed positioning with pointer-events:none, no bg interference
+ *  ✅ Puppeteer: production-safe, no hardcoded paths, supports local + Vercel/Railway
+ *  ✅ Indian number formatting: en-IN locale with proper ₹ prefix
  */
 
 const fs   = require('fs');
@@ -26,20 +29,39 @@ try {
   // Logo file not found — invoice will render without it
 }
 
+// ── RUPEE SYMBOL — safe HTML entity ──────────────────────────────────────────
+// &#x20B9; is the Unicode Indian Rupee sign — renders correctly in all PDF engines
+const RS = '&#x20B9;';
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+/**
+ * Format number in Indian locale (e.g. 1,23,456.78)
+ * Returns '—' for null/undefined/NaN
+ */
 function fmt(n) {
-  if (n === undefined || n === null) return '—';
-  return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  if (n === undefined || n === null || isNaN(Number(n))) return '&mdash;';
+  return Number(n).toLocaleString('en-IN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
 }
 
 function fmtDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  if (!d) return '&mdash;';
+  return new Date(d).toLocaleDateString('en-IN', {
+    day:   '2-digit',
+    month: '2-digit',
+    year:  'numeric',
+  });
 }
 
 function fmtDateLong(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  if (!d) return '&mdash;';
+  return new Date(d).toLocaleDateString('en-IN', {
+    day:   'numeric',
+    month: 'long',
+    year:  'numeric',
+  });
 }
 
 /** Convert a number to Indian number-words for the balance line */
@@ -49,12 +71,13 @@ function numberToWords(num) {
                  'SEVENTEEN', 'EIGHTEEN', 'NINETEEN'];
   const tens = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY'];
 
-  if (num === 0) return 'RUPEES ZERO ONLY';
+  if (!num || isNaN(Number(num))) return 'RUPEES ZERO ONLY';
+  if (Number(num) === 0) return 'RUPEES ZERO ONLY';
 
   function convert(n) {
-    if (n < 20)   return ones[n];
-    if (n < 100)  return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
-    if (n < 1000) return ones[Math.floor(n / 100)] + ' HUNDRED' + (n % 100 ? ' ' + convert(n % 100) : '');
+    if (n < 20)      return ones[n];
+    if (n < 100)     return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+    if (n < 1000)    return ones[Math.floor(n / 100)] + ' HUNDRED' + (n % 100 ? ' ' + convert(n % 100) : '');
     if (n < 100000)  return convert(Math.floor(n / 1000)) + ' THOUSAND' + (n % 1000 ? ' ' + convert(n % 1000) : '');
     if (n < 10000000) return convert(Math.floor(n / 100000)) + ' LAKH' + (n % 100000 ? ' ' + convert(n % 100000) : '');
     return convert(Math.floor(n / 10000000)) + ' CRORE' + (n % 10000000 ? ' ' + convert(n % 10000000) : '');
@@ -67,7 +90,6 @@ function numberToWords(num) {
 
 // ── Generate invoice number from transactionId ────────────────────────────────
 function invoiceNumber(txn) {
-  // Use last 5 digits of transactionId or fallback to sequential
   if (txn.transactionId) {
     const digits = txn.transactionId.replace(/\D/g, '');
     return String(digits).slice(-5).padStart(5, '0');
@@ -75,105 +97,43 @@ function invoiceNumber(txn) {
   return '00001';
 }
 
-// ── Build the HTML template ───────────────────────────────────────────────────
-function buildInvoiceHtml(txn, payments) {
-  const logoImg = LOGO_BASE64
-    ? `<img src="${LOGO_BASE64}" alt="Dooars Green FPO Logo" class="logo-img" />`
-    : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
-
-  const totalPaid    = payments.reduce((s, p) => s + p.amount, 0);
-  const balance      = txn.balance;
-  const invoiceNo    = invoiceNumber(txn);
-  const invoiceDate  = fmtDateLong(txn.transactionDate);
-  const isAdvBalance = balance < 0;
-
-  // Build payment rows
-  const paymentRows = payments.length === 0
-    ? `<tr><td colspan="12" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
-    : payments.map((p, i) => `
-        <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-          <td>${fmtDate(p.paymentDate)}</td>
-          <td colspan="6" style="text-align: right; padding-right: 15px; font-style: italic; color: #555;">Payment (${p.paymentMode || 'Cash'})</td>
-          <td>${p.notes || '—'}</td>
-          <td>—</td>
-          <td>${p.paymentMode === 'Cash' ? fmt(p.amount) : '—'}</td>
-          <td>—</td>
-          <td>${fmt(p.amount)}</td>
-        </tr>`).join('');
-
-  const txnRow = `
-    <tr class="row-even">
-      <td>${fmtDate(txn.transactionDate)}</td>
-      <td>${fmt(txn.grossQty)}</td>
-      <td>${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '—'}</td>
-      <td>${fmt(txn.lessQty)}</td>
-      <td>${txn.fineLeaf > 0 ? `${txn.fineLeaf}%` : '—'}</td>
-      <td><strong>${fmt(txn.netQty)}</strong></td>
-      <td>${fmt(txn.ratePerKg)}</td>
-      <td>${fmt(txn.grossAmount)}</td>
-      <td>${txn.description || txn.teaType || '—'}</td>
-      <td>${fmt(txn.netPayable)}</td>
-      <td>${fmt(txn.advancePayment)}</td>
-      <td><strong>${fmt(txn.finalPayable)}</strong></td>
-    </tr>`;
-
-  const totalRow = `
-    <tr class="total-row">
-      <td><strong>Total</strong></td>
-      <td>${fmt(txn.grossQty)}</td>
-      <td>—</td>
-      <td>${fmt(txn.lessQty)}</td>
-      <td>—</td>
-      <td><strong>${fmt(txn.netQty)}</strong></td>
-      <td>—</td>
-      <td>${fmt(txn.grossAmount)}</td>
-      <td>—</td>
-      <td>${fmt(txn.netPayable)}</td>
-      <td>${fmt(txn.advancePayment)}</td>
-      <td class="total-amount">${fmt(txn.finalPayable)}</td>
-    </tr>`;
-
-  const balanceSection = balance !== 0 
-    ? `<div class="balance-box">
-         <div class="balance-label">${isAdvBalance ? 'ADVANCE BALANCE' : 'OUTSTANDING BALANCE'}</div>
-         <div class="balance-value">${fmt(Math.abs(balance))}</div>
-         <div class="amount-words">${numberToWords(Math.abs(balance))}</div>
-       </div>` 
-    : '';
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DOOARS GREEN FPO - Payment Voucher</title>
-<style>
+// ── SHARED CSS — injected into every invoice template ────────────────────────
+const SHARED_CSS = `
   /* ── Reset & Base ── */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
+    font-size: 10.5px;
     color: #222;
     background: #fff;
-    padding: 16px 20px;
+    padding: 14px 18px;
+    position: relative;
   }
 
-  /* ── Watermark ── */
+  /* ── Watermark: fixed behind all content, never blocks row bg ── */
   .watermark-bg {
-    position: absolute;
+    position: fixed;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%) rotate(-30deg);
-    width: 460px;
-    height: 460px;
-    opacity: 0.1;
-    z-index: -10;
+    width: 420px;
+    height: 420px;
+    opacity: 0.07;
+    z-index: 0;
     pointer-events: none;
   }
   .watermark-bg img {
     width: 100%;
     height: 100%;
     object-fit: contain;
+  }
+
+  /* ── All content sits above watermark ── */
+  .header, .billed-section, .table-wrapper,
+  .balance-row, .amount-words, .quality-note,
+  .footer-company, .signatures, .summary-box {
+    position: relative;
+    z-index: 1;
   }
 
   /* ── Header ── */
@@ -184,17 +144,15 @@ function buildInvoiceHtml(txn, payments) {
     padding-bottom: 10px;
     border-bottom: 2.5px solid #2d6a2d;
     margin-bottom: 12px;
-    position: relative;
-    z-index: 1;
   }
   .logo-img {
-    width: 90px;
-    height: 90px;
+    width: 80px;
+    height: 80px;
     object-fit: contain;
   }
   .logo-placeholder {
-    width: 90px;
-    height: 90px;
+    width: 80px;
+    height: 80px;
     background: #2d6a2d;
     color: #fff;
     font-weight: bold;
@@ -206,40 +164,47 @@ function buildInvoiceHtml(txn, payments) {
     border-radius: 4px;
     line-height: 1.3;
   }
-  .header-right {
-    text-align: right;
-  }
-  .voucher-title {
-    font-size: 15px;
+  .header-center { flex: 1; text-align: center; padding: 0 12px; }
+  .company-main  {
+    font-size: 17px;
     font-weight: 900;
     color: #2d6a2d;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .company-sub {
+    font-size: 11px;
+    color: #555;
+    margin-top: 2px;
+  }
+  .header-right { text-align: right; min-width: 160px; }
+  .voucher-title {
+    font-size: 13px;
+    font-weight: 900;
+    color: #2d6a2d;
+    letter-spacing: 0.4px;
     text-transform: uppercase;
   }
   .invoice-date {
-    font-size: 13px;
-    color: #333;
+    font-size: 11px;
+    color: #444;
     margin: 3px 0;
   }
   .invoice-no {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 800;
     color: #1a1a1a;
     text-transform: uppercase;
   }
 
   /* ── Billed To ── */
-  .billed-section {
-    margin-bottom: 14px;
-    position: relative;
-    z-index: 1;
-  }
+  .billed-section { margin-bottom: 12px; }
   .billed-label {
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 900;
     color: #2d6a2d;
     text-transform: uppercase;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
   }
   .billed-name {
     font-size: 13px;
@@ -247,76 +212,61 @@ function buildInvoiceHtml(txn, payments) {
     text-transform: uppercase;
     color: #111;
   }
-  .billed-detail {
-    font-size: 11px;
-    color: #444;
-  }
+  .billed-detail { font-size: 10.5px; color: #444; }
 
   /* ── Divider ── */
-  hr {
-    border: none;
-    border-top: 1.5px solid #2d6a2d;
-    margin: 10px 0;
-  }
+  hr { border: none; border-top: 1.5px solid #2d6a2d; margin: 8px 0; }
 
   /* ── Table ── */
-  .table-wrapper {
-    position: relative;
-    z-index: 1;
-    overflow-x: auto;
-  }
+  .table-wrapper { overflow-x: auto; }
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10.5px;
+    font-size: 10px;
+    table-layout: fixed;
   }
-  thead tr {
-    background: #2d6a2d;
-    color: #fff;
-  }
+  colgroup col { /* override per-table */  }
+
+  thead tr { background: #2d6a2d; color: #fff; }
   thead th {
-    padding: 7px 5px;
+    padding: 6px 4px;
     text-align: center;
     font-weight: 700;
     text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 0.3px;
+    font-size: 9.5px;
+    letter-spacing: 0.2px;
+    white-space: nowrap;       /* CRITICAL: keeps headers on single line */
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  tbody td {
-    padding: 6px 5px;
-    text-align: center;
-    border-bottom: 1px solid #e0e0e0;
-  }
-  .row-even { background: #fafafa; }
-  .row-odd  { background: #f0f7f0; }
+  /* Right-align numeric headers */
+  thead th.num { text-align: right; padding-right: 6px; }
 
-  /* Advance Balance row */
-  .adv-row td {
-    font-weight: 600;
-    color: #444;
-    border-bottom: 1px solid #ddd;
+  tbody td {
+    padding: 5px 4px;
+    text-align: center;
+    border-bottom: 1px solid #e8e8e8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .adv-row .adv-label {
-    text-align: left;
-    padding-left: 8px;
-    color: #555;
-  }
-  .adv-row .adv-value {
-    color: #c0392b;
-    font-weight: 700;
-  }
+  tbody td.num  { text-align: right; padding-right: 6px; }
+  tbody td.left { text-align: left;  padding-left:  6px; }
+
+  .row-even { background: #fff; }
+  .row-odd  { background: #f0f7f0; }
 
   /* Total row */
   .total-row td {
-    background: #f0f7f0;
+    background: #e8f5e8;
     font-weight: 700;
     border-top: 2px solid #2d6a2d;
     border-bottom: 2px solid #2d6a2d;
     color: #1a1a1a;
   }
   .total-amount {
-    color: #2d6a2d;
-    font-size: 12px;
+    color: #1a5c1a;
+    font-size: 11px;
   }
 
   /* ── Balance Banner ── */
@@ -326,187 +276,242 @@ function buildInvoiceHtml(txn, payments) {
     align-items: center;
     padding: 6px 10px;
     background: #fff8ec;
-    border: 1px solid #e8c95a;
-    border-radius: 3px;
-    margin: 10px 0;
-    position: relative;
-    z-index: 1;
+    border: 1.5px solid #e8c95a;
+    border-radius: 4px;
+    margin: 8px 0;
   }
   .balance-label {
     font-weight: 800;
-    font-size: 12px;
+    font-size: 11px;
     color: #b8860b;
     text-transform: uppercase;
   }
-  .balance-value {
-    font-weight: 900;
-    font-size: 13px;
-    color: ${balance < 0 ? '#c0392b' : '#2d6a2d'};
-  }
+  .balance-value-positive { font-weight: 900; font-size: 12px; color: #1a5c1a; }
+  .balance-value-negative { font-weight: 900; font-size: 12px; color: #c0392b; }
 
   /* ── Amount in Words ── */
   .amount-words {
     background: #f5fff5;
     border: 1.5px solid #2d6a2d;
-    border-radius: 3px;
-    padding: 8px 12px;
-    font-size: 11.5px;
+    border-radius: 4px;
+    padding: 7px 10px;
+    font-size: 11px;
     font-weight: 800;
     color: #1a4f1a;
     text-transform: uppercase;
     letter-spacing: 0.3px;
-    margin: 10px 0;
-    position: relative;
-    z-index: 1;
+    margin: 8px 0;
   }
 
   /* ── Quality Note ── */
   .quality-note {
-    margin: 12px 0;
-    padding: 10px 12px;
+    margin: 10px 0;
+    padding: 8px 10px;
     background: #fffdf5;
     border-left: 3px solid #e8c95a;
-    font-size: 10.5px;
-    position: relative;
-    z-index: 1;
+    font-size: 10px;
   }
-  .quality-note p { font-weight: 700; margin-bottom: 5px; }
-  .quality-note ul {
-    margin-left: 16px;
-    margin-bottom: 8px;
-  }
-  .quality-note li { margin-bottom: 3px; }
-  .quality-note .gratitude {
-    font-style: italic;
-    color: #555;
-    line-height: 1.5;
-  }
+  .quality-note p { font-weight: 700; margin-bottom: 4px; }
+  .quality-note ul { margin-left: 14px; margin-bottom: 6px; }
+  .quality-note li { margin-bottom: 2px; }
+  .quality-note .gratitude { font-style: italic; color: #555; line-height: 1.4; }
 
   /* ── Footer ── */
   .footer-company {
     margin-top: 8px;
-    padding-top: 8px;
+    padding-top: 6px;
     border-top: 1.5px solid #2d6a2d;
-    position: relative;
-    z-index: 1;
   }
-  .footer-company .company-name {
-    font-size: 13px;
+  .footer-company .co-name {
+    font-size: 12px;
     font-weight: 900;
     color: #2d6a2d;
     text-transform: uppercase;
   }
-  .footer-company .contact {
-    font-size: 10px;
-    color: #444;
-    margin-top: 2px;
-  }
+  .footer-company .contact { font-size: 9.5px; color: #555; margin-top: 1px; }
 
   /* ── Signatures ── */
   .signatures {
     display: flex;
     justify-content: space-between;
-    margin-top: 40px;
-    position: relative;
-    z-index: 1;
+    margin-top: 36px;
   }
-  .sig-block {
-    text-align: center;
-    width: 200px;
+  .sig-block { text-align: center; width: 180px; }
+  .sig-line  { border-top: 1.5px solid #333; margin-bottom: 4px; }
+  .sig-label { font-size: 10px; color: #333; font-weight: 600; }
+
+  /* ── Summary box (factory invoices) ── */
+  .summary-box { margin: 12px 0; display: flex; flex-direction: column; gap: 5px; }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 10px;
+    border-radius: 4px;
   }
-  .sig-line {
-    border-top: 1.5px solid #333;
-    margin-bottom: 5px;
-  }
-  .sig-label {
-    font-size: 11px;
-    color: #333;
-    font-weight: 600;
-  }
+  .summary-row.gross   { background: #f0f7f0; border: 1px solid #2d6a2d; }
+  .summary-row.advance { background: #fff8ec; border: 1px solid #e8c95a; }
+  .summary-label { font-weight: 700; font-size: 10.5px; color: #333; text-transform: uppercase; }
+  .summary-value { font-weight: 900; font-size: 12px; }
 
   @media print {
-    body { padding: 10px 15px; }
+    body { padding: 8px 12px; }
   }
-</style>
+`;
+
+// ── Build single-transaction invoice HTML ─────────────────────────────────────
+function buildInvoiceHtml(txn, payments) {
+  const logoImg = LOGO_BASE64
+    ? `<img src="${LOGO_BASE64}" alt="Dooars Green FPO Logo" class="logo-img" />`
+    : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
+
+  const totalPaid   = payments.reduce((s, p) => s + p.amount, 0);
+  const balance     = txn.balance;
+  const invoiceNo   = invoiceNumber(txn);
+  const invoiceDate = fmtDateLong(txn.transactionDate);
+  const isNegBal    = balance < 0;
+
+  // Payment rows
+  const paymentRows = payments.length === 0
+    ? `<tr><td colspan="12" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
+    : payments.map((p, i) => `
+      <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
+        <td class="left">${fmtDate(p.paymentDate)}</td>
+        <td colspan="7" style="text-align:right;padding-right:10px;font-style:italic;color:#555;">
+          Payment (${p.paymentMode || 'Cash'})
+        </td>
+        <td class="left">${p.notes || '&mdash;'}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
+      </tr>`).join('');
+
+  const txnRow = `
+    <tr class="row-even">
+      <td class="left">${fmtDate(txn.transactionDate)}</td>
+      <td class="num">${fmt(txn.grossQty)}</td>
+      <td class="num">${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '&mdash;'}</td>
+      <td class="num">${fmt(txn.lessQty)}</td>
+      <td class="num">${txn.fineLeaf > 0 ? `${txn.fineLeaf}%` : '&mdash;'}</td>
+      <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
+      <td class="num">${RS}${fmt(txn.ratePerKg)}</td>
+      <td class="num">${RS}${fmt(txn.grossAmount)}</td>
+      <td>${txn.description || txn.teaType || '&mdash;'}</td>
+      <td class="num">${RS}${fmt(txn.netPayable)}</td>
+      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
+      <td class="num"><strong>${RS}${fmt(txn.finalPayable)}</strong></td>
+    </tr>`;
+
+  const totalRow = `
+    <tr class="total-row">
+      <td class="left"><strong>TOTAL</strong></td>
+      <td class="num">${fmt(txn.grossQty)}</td>
+      <td class="num">&mdash;</td>
+      <td class="num">${fmt(txn.lessQty)}</td>
+      <td class="num">&mdash;</td>
+      <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
+      <td class="num">&mdash;</td>
+      <td class="num">${RS}${fmt(txn.grossAmount)}</td>
+      <td class="num">&mdash;</td>
+      <td class="num">${RS}${fmt(txn.netPayable)}</td>
+      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
+      <td class="num total-amount">${RS}${fmt(txn.finalPayable)}</td>
+    </tr>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DOOARS GREEN FPO - Payment Voucher</title>
+<style>${SHARED_CSS}</style>
 </head>
 <body>
 
-<!-- ══ WATERMARK ═══════════════════════════════════════════════════════════════ -->
+<!-- Watermark -->
 ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="watermark" /></div>` : ''}
 
-<!-- ══ HEADER ═══════════════════════════════════════════════════════════════ -->
+<!-- Header -->
 <div class="header">
-  <div class="logo-col">
-    ${logoImg}
+  <div class="logo-col">${logoImg}</div>
+  <div class="header-center">
+    <div class="company-main">DOOARS GREEN FPO</div>
+    <div class="company-sub">Small Tea Growers Collective</div>
   </div>
   <div class="header-right">
-    <div class="voucher-title">DOOARS GREEN FPO PAYMENT VOUCHER</div>
+    <div class="voucher-title">Payment Voucher</div>
     <div class="invoice-date">${invoiceDate}</div>
-    <div class="invoice-no">INVOICE NO. ${invoiceNo}</div>
+    <div class="invoice-no">No. ${invoiceNo}</div>
   </div>
 </div>
 
-<!-- ══ BILLED TO ══════════════════════════════════════════════════════════════ -->
+<!-- Billed To -->
 <div class="billed-section">
-  <div class="billed-label">BILLED TO:</div>
-  <div class="billed-name">${txn.merchantName || '—'}</div>
-  <div class="billed-detail">V.NO &ndash; ${txn.transactionId || '—'}</div>
+  <div class="billed-label">Billed To:</div>
+  <div class="billed-name">${txn.merchantName || '&mdash;'}</div>
+  <div class="billed-detail">V.NO &ndash; ${txn.transactionId || '&mdash;'}</div>
   <div class="billed-detail">DATE &ndash; ${fmtDate(txn.transactionDate)}</div>
 </div>
 
 <hr />
 
-<!-- ══ TRANSACTION TABLE ═══════════════════════════════════════════════════════ -->
+<!-- Transaction Table -->
 <div class="table-wrapper">
   <table>
+    <colgroup>
+      <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:5%">
+      <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:10%">
+      <col style="width:16%">
+      <col style="width:9%">
+      <col style="width:9%">
+      <col style="width:9%">
+    </colgroup>
     <thead>
       <tr>
-        <th>DATE</th>
-        <th>QTY (KG)</th>
-        <th>LESS %</th>
-        <th>LESS (KG)</th>
-        <th>FINE LEAF %</th>
-        <th>Net QTY</th>
-        <th>RATE</th>
-        <th>AMOUNT</th>
-        <th>DESCRIPTION</th>
-        <th>NET PAYABLE</th>
-        <th>ADVANCE</th>
-        <th>TOTAL</th>
+        <th class="left">DATE</th>
+        <th class="num">QTY (KG)</th>
+        <th class="num">LESS%</th>
+        <th class="num">LESS (KG)</th>
+        <th class="num">FINE%</th>
+        <th class="num">NET QTY</th>
+        <th class="num">RATE (${RS})</th>
+        <th class="num">AMOUNT (${RS})</th>
+        <th>DESC</th>
+        <th class="num">NET PAY</th>
+        <th class="num">ADVANCE</th>
+        <th class="num">TOTAL (${RS})</th>
       </tr>
     </thead>
     <tbody>
-
-
-      <!-- Main transaction row -->
       ${txnRow}
-
-      <!-- Payment rows -->
       ${paymentRows}
-
-      <!-- Total -->
       ${totalRow}
     </tbody>
   </table>
 </div>
 
-<!-- ══ BALANCE ════════════════════════════════════════════════════════════════ -->
+<!-- Balance -->
 <div class="balance-row">
   <span class="balance-label">TOTAL FINAL AMOUNT:</span>
-  <span class="balance-value">${fmt(txn.finalPayable)}</span>
+  <span class="${balance < 0 ? 'balance-value-negative' : 'balance-value-positive'}">${RS}${fmt(txn.finalPayable)}</span>
 </div>
 
-<!-- ══ AMOUNT IN WORDS ════════════════════════════════════════════════════════ -->
+<!-- Amount in Words -->
 <div class="amount-words">
-  TOTAL AMOUNT &gt; ${numberToWords(txn.finalPayable)}
+  TOTAL AMOUNT &rarr; ${numberToWords(txn.finalPayable)}
 </div>
 ${txn.advancePayment > 0 ? `
-<div class="amount-words" style="background: #fdf5f5; border-color: #c0392b; color: #a93226; margin-top: 6px;">
-  TOTAL ADVANCE &gt; ${numberToWords(txn.advancePayment)}
-</div>
-` : ''}
+<div class="amount-words" style="background:#fdf5f5;border-color:#c0392b;color:#a93226;margin-top:5px;">
+  TOTAL ADVANCE &rarr; ${numberToWords(txn.advancePayment)}
+</div>` : ''}
 
-<!-- ══ QUALITY NOTE ═══════════════════════════════════════════════════════════ -->
+<!-- Quality Note -->
 <div class="quality-note">
   <p>Please note the following quality deductions:</p>
   <ul>
@@ -516,20 +521,20 @@ ${txn.advancePayment > 0 ? `
   </ul>
   <p class="gratitude">
     We are grateful for the trust and cooperation of every Small Tea Grower in our community.<br />
-    Your commitment to quality green leaves strengthens all of us — thank you for being a vital part of this journey together.
+    Your commitment to quality green leaves strengthens all of us &mdash; thank you for being a vital part of this journey together.
   </p>
 </div>
 
 <hr />
 
-<!-- ══ FOOTER COMPANY ══════════════════════════════════════════════════════════ -->
+<!-- Footer -->
 <div class="footer-company">
-  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="co-name">DOOARS GREEN FPO</div>
   <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
   <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
 </div>
 
-<!-- ══ SIGNATURES ══════════════════════════════════════════════════════════════ -->
+<!-- Signatures -->
 <div class="signatures">
   <div class="sig-block">
     <div class="sig-line"></div>
@@ -549,9 +554,8 @@ ${txn.advancePayment > 0 ? `
 exports.generateInvoice = async (req, res) => {
   try {
     const { id } = req.params;
-    const format  = (req.query.format || 'pdf').toLowerCase();   // 'pdf' | 'html'
+    const format  = (req.query.format || 'pdf').toLowerCase();
 
-    // Fetch transaction + all linked payments
     const [txn, payments] = await Promise.all([
       MerchantTransaction.findById(id).lean(),
       MerchantPayment.find({ transaction: id }).sort('paymentDate').lean(),
@@ -563,12 +567,10 @@ exports.generateInvoice = async (req, res) => {
 
     const html = buildInvoiceHtml(txn, payments);
 
-    // ── HTML preview (handy for debugging) ───────────────────────────────────
     if (format === 'html') {
-      return res.setHeader('Content-Type', 'text/html').send(html);
+      return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
     }
 
-    // ── PDF generation ────────────────────────────────────────────────────────
     const buffer = await generatePdf(html);
     const safeFilename = `invoice-${txn.transactionId || id}-${Date.now()}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
@@ -576,93 +578,90 @@ exports.generateInvoice = async (req, res) => {
     res.send(buffer);
 
   } catch (err) {
-    console.error('[invoiceController.generateInvoice] Error:', err.message, err.stack);
+    console.error('[invoiceController.generateInvoice] Error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to generate invoice: ' + err.message });
   }
 };
 
-// ── Build multi-transaction HTML (merchant + date range) ─────────────────────────
+// ── Build multi-transaction HTML (merchant + date range) ──────────────────────
 function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, paymentsMap, standaloneAdvances) {
   const logoImg = LOGO_BASE64
     ? `<img src="${LOGO_BASE64}" alt="Dooars Green FPO Logo" class="logo-img" />`
     : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
 
-  const isSameDate = startDate === endDate;
-  const invoiceDate = isSameDate ? fmtDateLong(startDate) : `${fmtDateLong(startDate)} - ${fmtDateLong(endDate)}`;
-  const dateStr     = isSameDate ? fmtDate(startDate) : `${fmtDate(startDate)} to ${fmtDate(endDate)}`;
+  const isSameDate  = startDate === endDate;
+  const invoiceDate = isSameDate
+    ? fmtDateLong(startDate)
+    : `${fmtDateLong(startDate)} &ndash; ${fmtDateLong(endDate)}`;
+  const dateStr = isSameDate
+    ? fmtDate(startDate)
+    : `${fmtDate(startDate)} to ${fmtDate(endDate)}`;
 
-  // Totals across all transactions on that date
-  const totals = transactions.reduce(
-    (a, t) => ({
-      grossQty:      a.grossQty      + (t.grossQty      || 0),
-      lessQty:       a.lessQty       + (t.lessQty        || 0),
-      grossAmount:   a.grossAmount   + (t.grossAmount    || 0),
-      netPayable:    a.netPayable    + (t.netPayable      || 0),
-      advancePayment: a.advancePayment + (t.advancePayment || 0),
-      finalPayable:  a.finalPayable  + (t.finalPayable   || 0),
-      balance:       a.balance       + (t.balance         || 0),
-    }),
-    { grossQty: 0, lessQty: 0, grossAmount: 0, netPayable: 0, advancePayment: 0, finalPayable: 0, balance: 0 }
-  );
+  // Summation across all transactions
+  const totals = transactions.reduce((a, t) => ({
+    grossQty:       a.grossQty       + (t.grossQty       || 0),
+    lessQty:        a.lessQty        + (t.lessQty         || 0),
+    grossAmount:    a.grossAmount    + (t.grossAmount     || 0),
+    netPayable:     a.netPayable     + (t.netPayable      || 0),
+    advancePayment: a.advancePayment + (t.advancePayment  || 0),
+    finalPayable:   a.finalPayable   + (t.finalPayable    || 0),
+    balance:        a.balance        + (t.balance          || 0),
+  }), { grossQty: 0, lessQty: 0, grossAmount: 0, netPayable: 0, advancePayment: 0, finalPayable: 0, balance: 0 });
 
-  // Invoice number from date: YYYYMMDD
   const d = new Date(endDate || startDate);
   const invoiceNo = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
 
-  // Build one row per transaction
+  // Build rows
   const txnRows = transactions.map((t, i) => {
-    const payments = paymentsMap[t._id.toString()] || [];
-    const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
-    const paymentSubRows = payments.map((p) => `
-      <tr class="row-even" style="font-style: italic; color: #444; background: #fafafa;">
-        <td>${fmtDate(p.paymentDate)}</td>
-        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.paymentMode || 'Cash'})</td>
-        <td>${p.notes || '—'}</td>
-        <td>—</td>
-        <td>—</td>
-        <td style="color: #2d6a2d; font-weight: bold;">- ${fmt(p.amount)}</td>
+    const pmts = paymentsMap[t._id.toString()] || [];
+    const paymentSubRows = pmts.map((p) => `
+      <tr class="row-even" style="font-style:italic;color:#555;">
+        <td class="left">${fmtDate(p.paymentDate)}</td>
+        <td colspan="7" style="text-align:right;padding-right:10px;">Payment (${p.paymentMode || 'Cash'})</td>
+        <td class="left">${p.notes || '&mdash;'}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
       </tr>`).join('');
 
     return `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-        <td>${fmtDate(t.transactionDate)}</td>
-        <td>${fmt(t.grossQty)}</td>
-        <td>${t.lessPercent > 0 ? `${t.lessPercent}%` : '—'}</td>
-        <td>${fmt(t.lessQty)}</td>
-        <td>${t.fineLeaf > 0 ? `${t.fineLeaf}%` : '—'}</td>
-        <td><strong>${fmt(t.netQty)}</strong></td>
-        <td>${fmt(t.ratePerKg)}</td>
-        <td>${fmt(t.grossAmount)}</td>
-        <td>${t.description || t.teaType || '—'}</td>
-        <td>${fmt(t.netPayable)}</td>
-        <td>${fmt(t.advancePayment)}</td>
-        <td><strong>${fmt(t.finalPayable)}</strong></td>
+        <td class="left">${fmtDate(t.transactionDate)}</td>
+        <td class="num">${fmt(t.grossQty)}</td>
+        <td class="num">${t.lessPercent > 0 ? `${t.lessPercent}%` : '&mdash;'}</td>
+        <td class="num">${fmt(t.lessQty)}</td>
+        <td class="num">${t.fineLeaf > 0 ? `${t.fineLeaf}%` : '&mdash;'}</td>
+        <td class="num"><strong>${fmt(t.netQty)}</strong></td>
+        <td class="num">${RS}${fmt(t.ratePerKg)}</td>
+        <td class="num">${RS}${fmt(t.grossAmount)}</td>
+        <td>${t.description || t.teaType || '&mdash;'}</td>
+        <td class="num">${RS}${fmt(t.netPayable)}</td>
+        <td class="num">${t.advancePayment > 0 ? `${RS}${fmt(t.advancePayment)}` : '&mdash;'}</td>
+        <td class="num"><strong>${RS}${fmt(t.finalPayable)}</strong></td>
       </tr>
       ${paymentSubRows}`;
   }).join('');
 
   // Standalone advance rows
   const advanceRows = (standaloneAdvances || []).map((a) => `
-    <tr class="row-even" style="font-style: italic; color: #8b4513; background: #fff8ec;">
-      <td>${fmtDate(a.advanceDate)}</td>
-      <td colspan="6" style="text-align: right; padding-right: 15px; font-weight: bold;">ADVANCE GIVEN (${a.paymentMode || 'Cash'}) ${a.notes ? ' \u00B7 ' + a.notes : ''}</td>
-      <td>${a.advanceId || ''}</td>
-      <td>—</td>
-      <td>—</td>
-      <td style="color: #c0392b; font-weight: bold;">- ${fmt(a.amount)}</td>
+    <tr class="row-even" style="font-style:italic;color:#8b4513;background:#fff8ec;">
+      <td class="left">${fmtDate(a.advanceDate)}</td>
+      <td colspan="7" style="text-align:right;padding-right:10px;font-weight:bold;">
+        ADVANCE GIVEN (${a.paymentMode || 'Cash'})${a.notes ? ' &middot; ' + a.notes : ''}
+      </td>
+      <td class="left">${a.advanceId || ''}</td>
+      <td class="num">&mdash;</td>
+      <td class="num">&mdash;</td>
+      <td class="num" style="color:#c0392b;font-weight:bold;">-${RS}${fmt(a.amount)}</td>
     </tr>`).join('');
 
-  // Sum of all payments made against these transactions
   const totalPaymentsMade = Object.values(paymentsMap).reduce(
-    (sum, payments) => sum + payments.reduce((s, p) => s + p.amount, 0), 0
+    (sum, pmts) => sum + pmts.reduce((s, p) => s + p.amount, 0), 0
   );
-  // Sum of standalone advances given in this period
   const totalStandaloneAdv = (standaloneAdvances || []).reduce((s, a) => s + a.amount, 0);
-  // True net amount still owed after all payments + standalone advances
   const netFinalAmount = Math.max(0,
     Math.round((totals.finalPayable - totalPaymentsMade - totalStandaloneAdv) * 100) / 100
   );
-
   const totalBalance = totals.balance;
 
   return `<!DOCTYPE html>
@@ -670,86 +669,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
 <head>
 <meta charset="UTF-8" />
 <title>DOOARS GREEN FPO - Payment Voucher</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11px;
-    color: #222;
-    background: #fff;
-    padding: 16px 20px;
-  }
-  .watermark-bg {
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%) rotate(-30deg);
-    width: 460px; height: 460px;
-    opacity: 0.1;
-    z-index: -10;
-    pointer-events: none;
-  }
-  .watermark-bg img { width: 100%; height: 100%; object-fit: contain; }
-  .header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    padding-bottom: 10px;
-    border-bottom: 2.5px solid #2d6a2d;
-    margin-bottom: 12px;
-    position: relative; z-index: 1;
-  }
-  .logo-img { width: 90px; height: 90px; object-fit: contain; }
-  .logo-placeholder {
-    width: 90px; height: 90px;
-    background: #2d6a2d; color: #fff;
-    font-weight: bold; font-size: 10px;
-    display: flex; align-items: center; justify-content: center;
-    text-align: center; border-radius: 4px; line-height: 1.3;
-  }
-  .header-right { text-align: right; }
-  .voucher-title { font-size: 15px; font-weight: 900; color: #2d6a2d; letter-spacing: 0.5px; text-transform: uppercase; }
-  .invoice-date { font-size: 13px; color: #333; margin: 3px 0; }
-  .invoice-no { font-size: 14px; font-weight: 800; color: #1a1a1a; text-transform: uppercase; }
-  .billed-section { margin-bottom: 14px; position: relative; z-index: 1; }
-  .billed-label { font-size: 12px; font-weight: 900; color: #2d6a2d; text-transform: uppercase; margin-bottom: 4px; }
-  .billed-name { font-size: 13px; font-weight: 700; text-transform: uppercase; color: #111; }
-  .billed-detail { font-size: 11px; color: #444; }
-  hr { border: none; border-top: 1.5px solid #2d6a2d; margin: 10px 0; }
-  .table-wrapper { position: relative; z-index: 1; overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-  thead tr { background: #2d6a2d; color: #fff; }
-  thead th { padding: 7px 5px; text-align: center; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.3px; }
-  tbody td { padding: 6px 5px; text-align: center; border-bottom: 1px solid #e0e0e0; }
-  .row-even { background: #fafafa; }
-  .row-odd  { background: #f0f7f0; }
-  .total-row td { background: #f0f7f0; font-weight: 700; border-top: 2px solid #2d6a2d; border-bottom: 2px solid #2d6a2d; color: #1a1a1a; }
-  .total-amount { color: #2d6a2d; font-size: 12px; }
-  .balance-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 6px 10px; background: #fff8ec; border: 1px solid #e8c95a;
-    border-radius: 3px; margin: 10px 0; position: relative; z-index: 1;
-  }
-  .balance-label { font-weight: 800; font-size: 12px; color: #b8860b; text-transform: uppercase; }
-  .balance-value { font-weight: 900; font-size: 13px; color: ${totalBalance < 0 ? '#c0392b' : '#2d6a2d'}; }
-  .amount-words {
-    background: #f5fff5; border: 1.5px solid #2d6a2d; border-radius: 3px;
-    padding: 8px 12px; font-size: 11.5px; font-weight: 800; color: #1a4f1a;
-    text-transform: uppercase; letter-spacing: 0.3px; margin: 10px 0; position: relative; z-index: 1;
-  }
-  .quality-note { margin: 12px 0; padding: 10px 12px; background: #fffdf5; border-left: 3px solid #e8c95a; font-size: 10.5px; position: relative; z-index: 1; }
-  .quality-note p { font-weight: 700; margin-bottom: 5px; }
-  .quality-note ul { margin-left: 16px; margin-bottom: 8px; }
-  .quality-note li { margin-bottom: 3px; }
-  .quality-note .gratitude { font-style: italic; color: #555; line-height: 1.5; }
-  .footer-company { margin-top: 8px; padding-top: 8px; border-top: 1.5px solid #2d6a2d; position: relative; z-index: 1; }
-  .footer-company .company-name { font-size: 13px; font-weight: 900; color: #2d6a2d; text-transform: uppercase; }
-  .footer-company .contact { font-size: 10px; color: #444; margin-top: 2px; }
-  .signatures { display: flex; justify-content: space-between; margin-top: 40px; position: relative; z-index: 1; }
-  .sig-block { text-align: center; width: 200px; }
-  .sig-line { border-top: 1.5px solid #333; margin-bottom: 5px; }
-  .sig-label { font-size: 11px; color: #333; font-weight: 600; }
-  @media print { body { padding: 10px 15px; } }
-</style>
+<style>${SHARED_CSS}</style>
 </head>
 <body>
 
@@ -757,15 +677,19 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 
 <div class="header">
   <div class="logo-col">${logoImg}</div>
+  <div class="header-center">
+    <div class="company-main">DOOARS GREEN FPO</div>
+    <div class="company-sub">Small Tea Growers Collective</div>
+  </div>
   <div class="header-right">
-    <div class="voucher-title">DOOARS GREEN FPO PAYMENT VOUCHER</div>
+    <div class="voucher-title">Payment Voucher</div>
     <div class="invoice-date">${invoiceDate}</div>
-    <div class="invoice-no">INVOICE NO. ${invoiceNo}</div>
+    <div class="invoice-no">No. ${invoiceNo}</div>
   </div>
 </div>
 
 <div class="billed-section">
-  <div class="billed-label">BILLED TO:</div>
+  <div class="billed-label">Billed To:</div>
   <div class="billed-name">${merchantName}</div>
   <div class="billed-detail">DATE &ndash; ${dateStr}</div>
   <div class="billed-detail">TOTAL ENTRIES &ndash; ${transactions.length}</div>
@@ -775,71 +699,81 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 
 <div class="table-wrapper">
   <table>
+    <colgroup>
+      <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:5%">
+      <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:10%">
+      <col style="width:16%">
+      <col style="width:9%">
+      <col style="width:9%">
+      <col style="width:9%">
+    </colgroup>
     <thead>
       <tr>
-        <th>DATE</th>
-        <th>QTY (KG)</th>
-        <th>LESS %</th>
-        <th>LESS (KG)</th>
-        <th>FINE LEAF %</th>
-        <th>Net QTY</th>
-        <th>RATE</th>
-        <th>AMOUNT</th>
-        <th>DESCRIPTION</th>
-        <th>NET PAYABLE</th>
-        <th>ADVANCE</th>
-        <th>TOTAL</th>
+        <th class="left">DATE</th>
+        <th class="num">QTY (KG)</th>
+        <th class="num">LESS%</th>
+        <th class="num">LESS (KG)</th>
+        <th class="num">FINE%</th>
+        <th class="num">NET QTY</th>
+        <th class="num">RATE (${RS})</th>
+        <th class="num">AMOUNT (${RS})</th>
+        <th>DESC</th>
+        <th class="num">NET PAY</th>
+        <th class="num">ADVANCE</th>
+        <th class="num">TOTAL (${RS})</th>
       </tr>
     </thead>
     <tbody>
-
-
       ${txnRows}
       ${advanceRows}
-
       <tr class="total-row">
-        <td><strong>Total</strong></td>
-        <td>${fmt(totals.grossQty)}</td>
-        <td>—</td>
-        <td>${fmt(totals.lessQty)}</td>
-        <td>—</td>
-        <td>—</td>
-        <td>—</td>
-        <td>${fmt(totals.grossAmount)}</td>
-        <td>—</td>
-        <td>${fmt(totals.netPayable)}</td>
-        <td>${fmt(totals.advancePayment)}</td>
-        <td class="total-amount">${fmt(totals.finalPayable)}</td>
+        <td class="left"><strong>TOTAL</strong></td>
+        <td class="num">${fmt(totals.grossQty)}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">${fmt(totals.lessQty)}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">${RS}${fmt(totals.grossAmount)}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">${RS}${fmt(totals.netPayable)}</td>
+        <td class="num">${totals.advancePayment > 0 ? `${RS}${fmt(totals.advancePayment)}` : '&mdash;'}</td>
+        <td class="num total-amount">${RS}${fmt(totals.finalPayable)}</td>
       </tr>
     </tbody>
   </table>
 </div>
 
-<div class="balance-row" style="border-color: #2d6a2d; background: #f0f7f0;">
-  <span class="balance-label" style="color: #1a5c1a;">GROSS PAYABLE (before advances):</span>
-  <span class="balance-value" style="color: #1a5c1a;">${fmt(totals.finalPayable)}</span>
+<div class="balance-row" style="border-color:#2d6a2d;background:#f0f7f0;">
+  <span class="balance-label" style="color:#1a5c1a;">GROSS PAYABLE (before advances):</span>
+  <span class="balance-value-positive">${RS}${fmt(totals.finalPayable)}</span>
 </div>
-${totalPaymentsMade > 0 ? `<div class="balance-row" style="border-color: #2d6a2d; background: #f5fff5;">
-  <span class="balance-label" style="color: #2d6a2d;">PAYMENTS MADE:</span>
-  <span class="balance-value" style="color: #c0392b;">- ${fmt(totalPaymentsMade)}</span>
+${totalPaymentsMade > 0 ? `<div class="balance-row" style="border-color:#2d6a2d;background:#f5fff5;">
+  <span class="balance-label" style="color:#2d6a2d;">PAYMENTS MADE:</span>
+  <span class="balance-value-negative">-${RS}${fmt(totalPaymentsMade)}</span>
 </div>` : ''}
-${totalStandaloneAdv > 0 ? `<div class="balance-row" style="border-color: #e8a000; background: #fff8ec;">
-  <span class="balance-label" style="color: #8b4513;">ADVANCE GIVEN:</span>
-  <span class="balance-value" style="color: #c0392b;">- ${fmt(totalStandaloneAdv)}</span>
+${totalStandaloneAdv > 0 ? `<div class="balance-row" style="border-color:#e8a000;background:#fff8ec;">
+  <span class="balance-label" style="color:#8b4513;">ADVANCE GIVEN:</span>
+  <span class="balance-value-negative">-${RS}${fmt(totalStandaloneAdv)}</span>
 </div>` : ''}
 <div class="balance-row">
   <span class="balance-label">NET AMOUNT PAYABLE:</span>
-  <span class="balance-value">${fmt(netFinalAmount)}</span>
+  <span class="${netFinalAmount > 0 ? 'balance-value-positive' : 'balance-value-negative'}">${RS}${fmt(netFinalAmount)}</span>
 </div>
 
 <div class="amount-words">
-  NET PAYABLE &gt; ${numberToWords(netFinalAmount)}
+  NET PAYABLE &rarr; ${numberToWords(netFinalAmount)}
 </div>
 ${totals.advancePayment > 0 ? `
-<div class="amount-words" style="background: #fdf5f5; border-color: #c0392b; color: #a93226; margin-top: 6px;">
-  TOTAL ADVANCE &gt; ${numberToWords(totals.advancePayment)}
-</div>
-` : ''}
+<div class="amount-words" style="background:#fdf5f5;border-color:#c0392b;color:#a93226;margin-top:5px;">
+  TOTAL ADVANCE &rarr; ${numberToWords(totals.advancePayment)}
+</div>` : ''}
 
 <div class="quality-note">
   <p>Please note the following quality deductions:</p>
@@ -850,14 +784,14 @@ ${totals.advancePayment > 0 ? `
   </ul>
   <p class="gratitude">
     We are grateful for the trust and cooperation of every Small Tea Grower in our community.<br />
-    Your commitment to quality green leaves strengthens all of us — thank you for being a vital part of this journey together.
+    Your commitment to quality green leaves strengthens all of us &mdash; thank you for being a vital part of this journey together.
   </p>
 </div>
 
 <hr />
 
 <div class="footer-company">
-  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="co-name">DOOARS GREEN FPO</div>
   <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
   <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
 </div>
@@ -878,28 +812,16 @@ ${totals.advancePayment > 0 ? `
 }
 
 // ── Controller 2: all transactions for a merchant on a given date / range ────────
-/**
- * GET /api/merchant-transactions/invoice/by-merchant-date
- * Query params:
- *   merchantName  (string, required)
- *   date          (ISO date string, optional)  e.g. "2025-09-19"
- *   startDate     (ISO date string, optional)
- *   endDate       (ISO date string, optional)
- *   format        'pdf' | 'html'  (default: pdf)
- */
 exports.generateInvoiceByMerchantDate = async (req, res) => {
   try {
     const { merchantName, date, startDate, endDate, format = 'pdf' } = req.query;
 
     if (!merchantName) {
-      return res.status(400).json({
-        success: false,
-        message: '`merchantName` query param is required',
-      });
+      return res.status(400).json({ success: false, message: '`merchantName` query param is required' });
     }
 
     const finalStart = startDate || date;
-    const finalEnd = endDate || date;
+    const finalEnd   = endDate   || date;
 
     if (!finalStart || !finalEnd) {
       return res.status(400).json({
@@ -908,15 +830,14 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
       });
     }
 
-    // Build date range for the full day
-    const MathStart = new Date(finalStart);
-    MathStart.setHours(0, 0, 0, 0);
-    const MathEnd   = new Date(finalEnd);
-    MathEnd.setHours(23, 59, 59, 999);
+    const rangeStart = new Date(finalStart);
+    rangeStart.setHours(0, 0, 0, 0);
+    const rangeEnd   = new Date(finalEnd);
+    rangeEnd.setHours(23, 59, 59, 999);
 
     const transactions = await MerchantTransaction.find({
-      merchantName: { $regex: new RegExp(`^${merchantName.trim()}$`, 'i') },
-      transactionDate: { $gte: MathStart, $lte: MathEnd },
+      merchantName:    { $regex: new RegExp(`^${merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      transactionDate: { $gte: rangeStart, $lte: rangeEnd },
     }).sort('transactionDate').lean();
 
     if (transactions.length === 0) {
@@ -927,14 +848,12 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
       });
     }
 
-    // Fetch all payments for these transactions in one query
     const txnIds = transactions.map((t) => t._id);
     const [allPayments, merchant] = await Promise.all([
       MerchantPayment.find({ transaction: { $in: txnIds } }).lean(),
-      Merchant.findOne({ name: { $regex: new RegExp(`^${merchantName.trim()}$`, 'i') } }).lean(),
+      Merchant.findOne({ name: { $regex: new RegExp(`^${merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }).lean(),
     ]);
 
-    // Group payments by transactionId
     const paymentsMap = {};
     allPayments.forEach((p) => {
       const key = p.transaction.toString();
@@ -942,26 +861,25 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
       paymentsMap[key].push(p);
     });
 
-    // Fetch standalone advance payments for this merchant in this date range
     let standaloneAdvances = [];
     if (merchant) {
       standaloneAdvances = await MerchantAdvance.find({
-        merchant: merchant._id,
-        advanceDate: { $gte: MathStart, $lte: MathEnd },
+        merchant:    merchant._id,
+        advanceDate: { $gte: rangeStart, $lte: rangeEnd },
       }).sort('advanceDate').lean();
     }
 
     const html = buildMultiInvoiceHtml(merchantName, finalStart, finalEnd, transactions, paymentsMap, standaloneAdvances);
 
-    // ── HTML preview ──────────────────────────────────────────────────────────
     if (format.toLowerCase() === 'html') {
-      return res.setHeader('Content-Type', 'text/html').send(html);
+      return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
     }
 
-    // ── PDF via shared helper (production-safe) ──────────────────────────────
-    const buffer = await generatePdf(html);
-    const safeName = merchantName.replace(/\s+/g, '_').toUpperCase();
-    const safeDate = (finalStart === finalEnd) ? finalStart.replace(/-/g, '') : `${finalStart.replace(/-/g, '')}_${finalEnd.replace(/-/g, '')}`;
+    const buffer    = await generatePdf(html);
+    const safeName  = merchantName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+    const safeDate  = (finalStart === finalEnd)
+      ? finalStart.replace(/-/g, '')
+      : `${finalStart.replace(/-/g, '')}_${finalEnd.replace(/-/g, '')}`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="invoice-${safeName}-${safeDate}.pdf"`);
     res.send(buffer);
@@ -972,54 +890,84 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
   }
 };
 
-// ── Shared PDF helper — uses system Chromium installed via Dockerfile ──────────
+// ── Production-safe PDF helper ────────────────────────────────────────────────
+/**
+ * Generates a PDF from HTML using puppeteer-core.
+ */
 async function generatePdf(html) {
-  // puppeteer-core v21+ is ESM-only — use dynamic import() instead of require()
   const { default: puppeteer } = await import('puppeteer-core');
-  let sparticuz;
-  try {
-    sparticuz = (await import('@sparticuz/chromium')).default;
-  } catch (err) {
-    console.warn("Could not load @sparticuz/chromium");
+
+  let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+  let launchArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-extensions',
+    '--font-render-hinting=none',
+  ];
+  let headlessMode = 'new';   // puppeteer v21+
+
+  // Only use sparticus automatically if we are on Vercel or AWS, because on local Windows it crashes.
+  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
+
+  if (!executablePath && isServerless) {
+    try {
+      const sparticuz = (await import('@sparticuz/chromium')).default;
+      executablePath  = await sparticuz.executablePath();
+      launchArgs      = sparticuz.args;
+      headlessMode    = sparticuz.headless;
+      console.log('[generatePdf] Using @sparticuz/chromium at:', executablePath);
+    } catch (_) {
+      // fallback
+    }
   }
 
-  // System chromium path set by Dockerfile ENV
-  let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-
+  // Platform defaults when no env var and no sparticuz
   if (!executablePath) {
     if (process.platform === 'win32') {
-      executablePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    } else if (sparticuz) {
-      executablePath = await sparticuz.executablePath();
+      const winPaths = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files\\Chromium\\Application\\chromium.exe',
+      ];
+      executablePath = winPaths.find(p => {
+        try { require('fs').accessSync(p); return true; } catch { return false; }
+      }) || winPaths[0];
     } else {
-      executablePath = '/usr/bin/chromium';
+      // Linux — common paths
+      const linuxPaths = [
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+      ];
+      executablePath = linuxPaths.find(p => {
+        try { require('fs').accessSync(p); return true; } catch { return false; }
+      }) || '/usr/bin/chromium';
     }
+    console.log('[generatePdf] Using platform default Chromium at:', executablePath);
   }
 
   const browser = await puppeteer.launch({
     executablePath,
-    headless: sparticuz ? sparticuz.headless : true,
-    args: sparticuz ? sparticuz.args : [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-extensions',
-    ],
+    headless: headlessMode,
+    args:     launchArgs,
   });
 
   try {
     const page = await browser.newPage();
+    // Set viewport to A4 dimensions
+    await page.setViewport({ width: 794, height: 1123 });
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     const pdfData = await page.pdf({
-      format: 'A4',
-      margin: { top: '10mm', bottom: '10mm', left: '10mm', right: '10mm' },
-      printBackground: true,
+      format:          'A4',
+      printBackground: true,   // CRITICAL: renders background colors
+      margin: { top: '10mm', bottom: '10mm', left: '8mm', right: '8mm' },
     });
-    // puppeteer-core v25+ returns Uint8Array; wrap in Buffer for Express
+    // puppeteer-core v25+ returns Uint8Array — wrap in Buffer for Express
     return Buffer.from(pdfData);
   } finally {
     await browser.close();
@@ -1032,165 +980,155 @@ function buildFactoryInvoiceHtml(record) {
     ? `<img src="${LOGO_BASE64}" alt="logo" class="logo-img" />`
     : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
 
-  const qty       = record.totalQuantity  || 0;
-  const lessPct   = record.lessPercentage || 0;
-  const lessQty   = parseFloat(((qty * lessPct) / 100).toFixed(2));
-  const netQty    = parseFloat((qty - lessQty).toFixed(2));
-  const fine      = record.fineLeaf       || 0;
-  const rate      = record.rate           || 0;
-  const totalAmt  = parseFloat((netQty * rate).toFixed(2));
-  const advance   = record.advance        || 0;
+  const qty      = record.totalQuantity  || 0;
+  const lessPct  = record.lessPercentage || 0;
+  const lessQty  = parseFloat(((qty * lessPct) / 100).toFixed(2));
+  const netQty   = parseFloat((qty - lessQty).toFixed(2));
+  const fine     = record.fineLeaf       || 0;
+  const rate     = record.rate           || 0;
+  const totalAmt = parseFloat((netQty * rate).toFixed(2));
+  const advance  = record.advance        || 0;
   const totalPaid = (record.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-  const due       = parseFloat((totalAmt - advance - totalPaid).toFixed(2));
+  const due      = parseFloat((totalAmt - advance - totalPaid).toFixed(2));
   const invoiceDate = fmtDateLong(record.date || record.createdAt);
   const invoiceNo   = String(record._id).slice(-6).toUpperCase();
 
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8" />
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
 <title>Factory Invoice - ${record.buyerName || ''}</title>
-<style>
-* { margin:0;padding:0;box-sizing:border-box; }
-body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
-.watermark-bg { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.1;z-index:-10;pointer-events:none; }
-.watermark-bg img { width:100%;height:100%;object-fit:contain; }
-.header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
-.logo-img { width:90px;height:90px;object-fit:contain; }
-.logo-placeholder { width:90px;height:90px;background:#2d6a2d;color:#fff;font-weight:bold;font-size:10px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:4px;line-height:1.3; }
-.header-right { text-align:right; }
-.voucher-title { font-size:15px;font-weight:900;color:#2d6a2d;letter-spacing:0.5px;text-transform:uppercase; }
-.invoice-date { font-size:13px;color:#333;margin:3px 0; }
-.invoice-no { font-size:14px;font-weight:800;color:#1a1a1a;text-transform:uppercase; }
-.billed-section { margin-bottom:14px;position:relative;z-index:1; }
-.billed-label { font-size:12px;font-weight:900;color:#2d6a2d;text-transform:uppercase;margin-bottom:4px; }
-.billed-name { font-size:13px;font-weight:700;text-transform:uppercase;color:#111; }
-.billed-detail { font-size:11px;color:#444; }
-hr { border:none;border-top:1.5px solid #2d6a2d;margin:10px 0; }
-.table-wrapper { position:relative;z-index:1;overflow-x:auto; }
-table { width:100%;border-collapse:collapse;font-size:10.5px; }
-thead tr { background:#2d6a2d;color:#fff; }
-thead th { padding:8px 6px;text-align:center;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.3px; }
-tbody td { padding:7px 6px;text-align:center;border-bottom:1px solid #e0e0e0; }
-.row-even { background:#fafafa; } .row-odd { background:#f0f7f0; }
-.total-row td { background:#f0f7f0;font-weight:700;border-top:2px solid #2d6a2d;border-bottom:2px solid #2d6a2d; }
-.total-amount { color:#2d6a2d;font-size:12px;font-weight:900; }
-.summary-box { margin:14px 0;display:flex;flex-direction:column;gap:6px;position:relative;z-index:1; }
-.summary-row { display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-radius:4px; }
-.summary-row.gross   { background:#f0f7f0;border:1px solid #2d6a2d; }
-.summary-row.advance { background:#fff8ec;border:1px solid #e8c95a; }
-.summary-row.due-row { background:${due > 0 ? '#fff1f1' : '#f0fff0'};border:1px solid ${due > 0 ? '#c0392b' : '#2d6a2d'}; }
-.summary-label { font-weight:700;font-size:11px;color:#333;text-transform:uppercase; }
-.summary-value { font-weight:900;font-size:13px; }
-.amount-words { background:#f5fff5;border:1.5px solid #2d6a2d;border-radius:3px;padding:8px 12px;font-size:11.5px;font-weight:800;color:#1a4f1a;text-transform:uppercase;letter-spacing:0.3px;margin:10px 0;position:relative;z-index:1; }
-.footer-company { margin-top:8px;padding-top:8px;border-top:1.5px solid #2d6a2d;position:relative;z-index:1; }
-.footer-company .company-name { font-size:13px;font-weight:900;color:#2d6a2d;text-transform:uppercase; }
-.footer-company .contact { font-size:10px;color:#444;margin-top:2px; }
-.signatures { display:flex;justify-content:space-between;margin-top:40px;position:relative;z-index:1; }
-.sig-block { text-align:center;width:200px; }
-.sig-line { border-top:1.5px solid #333;margin-bottom:5px; }
-.sig-label { font-size:11px;color:#333;font-weight:600; }
-@media print { body { padding:10px 15px; } }
-</style></head><body>
+<style>${SHARED_CSS}
+  /* Factory-specific overrides */
+  .due-row-pos { background:#f0fff0; border:1px solid #2d6a2d; }
+  .due-row-neg { background:#fff1f1; border:1px solid #c0392b; }
+</style>
+</head>
+<body>
+
 ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="watermark" /></div>` : ''}
+
 <div class="header">
   <div class="logo-col">${logoImg}</div>
+  <div class="header-center">
+    <div class="company-main">DOOARS GREEN FPO</div>
+    <div class="company-sub">Factory Sale Invoice</div>
+  </div>
   <div class="header-right">
-    <div class="voucher-title">DOOARS GREEN FPO &mdash; FACTORY INVOICE</div>
+    <div class="voucher-title">Factory Invoice</div>
     <div class="invoice-date">${invoiceDate}</div>
-    <div class="invoice-no">INVOICE NO. FCT-${invoiceNo}</div>
+    <div class="invoice-no">No. FCT-${invoiceNo}</div>
   </div>
 </div>
+
 <div class="billed-section">
-  <div class="billed-label">BUYER / PARTY:</div>
+  <div class="billed-label">Buyer / Party:</div>
   <div class="billed-name">${record.buyerName || '&mdash;'}</div>
   <div class="billed-detail">DATE &ndash; ${fmtDate(record.date)}</div>
   ${record.remarks ? `<div class="billed-detail">REMARKS &ndash; ${record.remarks}</div>` : ''}
 </div>
+
 <hr />
+
 <div class="table-wrapper">
   <table>
-    <thead><tr>
-      <th style="text-align:center;width:40px;">Sl No.</th>
-      <th style="text-align:center;">Date</th>
-      <th style="text-align:center;">Tea Type</th>
-      <th style="text-align:right;">Total QTY<br/>(kg)</th>
-      <th style="text-align:right;">Less %</th>
-      <th style="text-align:right;">Less QTY<br/>(kg)</th>
-      <th style="text-align:right;">Net QNTY<br/>(kg)</th>
-      <th style="text-align:right;">Fine %</th>
-      <th style="text-align:right;">Rate<br/>(&#8377;/kg)</th>
-      <th style="text-align:right;">Total AMT.<br/>(&#8377;)</th>
-    </tr></thead>
+    <colgroup>
+      <col style="width:5%">
+      <col style="width:9%">
+      <col style="width:10%">
+      <col style="width:10%">
+      <col style="width:7%">
+      <col style="width:10%">
+      <col style="width:10%">
+      <col style="width:7%">
+      <col style="width:11%">
+      <col style="width:11%">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>SL</th>
+        <th>DATE</th>
+        <th>TEA TYPE</th>
+        <th class="num">TOTAL QTY (KG)</th>
+        <th class="num">LESS%</th>
+        <th class="num">LESS QTY (KG)</th>
+        <th class="num">NET QTY (KG)</th>
+        <th class="num">FINE%</th>
+        <th class="num">RATE (${RS}/KG)</th>
+        <th class="num">TOTAL AMT (${RS})</th>
+      </tr>
+    </thead>
     <tbody>
       <tr class="row-even">
-        <td style="text-align:center;">1</td>
-        <td style="text-align:center;">${fmtDate(record.date)}</td>
-        <td style="text-align:center;font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
-        <td style="text-align:right;">${fmt(qty)}</td>
-        <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
-        <td style="text-align:right;">${fmt(lessQty)}</td>
-        <td style="text-align:right;font-weight:bold;color:#2d6a2d;">${fmt(netQty)}</td>
-        <td style="text-align:right;">${fine > 0 ? fine + '%' : '&mdash;'}</td>
-        <td style="text-align:right;">${fmt(rate)}</td>
-        <td style="text-align:right;font-weight:bold;">&#8377;${fmt(totalAmt)}</td>
+        <td>1</td>
+        <td>${fmtDate(record.date)}</td>
+        <td style="font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
+        <td class="num">${fmt(qty)}</td>
+        <td class="num">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
+        <td class="num">${fmt(lessQty)}</td>
+        <td class="num" style="font-weight:bold;color:#1a5c1a;">${fmt(netQty)}</td>
+        <td class="num">${fine > 0 ? fine + '%' : '&mdash;'}</td>
+        <td class="num">${RS}${fmt(rate)}</td>
+        <td class="num" style="font-weight:bold;">${RS}${fmt(totalAmt)}</td>
       </tr>
       ${(record.payments || []).map(p => `
-      <tr class="row-odd" style="font-style: italic; color: #444; background: #fafafa;">
-        <td style="text-align:center;"></td>
-        <td style="text-align:center;">${fmtDate(p.date)}</td>
-        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
-        <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
+      <tr class="row-odd" style="font-style:italic;color:#555;">
+        <td></td>
+        <td>${fmtDate(p.date)}</td>
+        <td colspan="7" style="text-align:right;padding-right:10px;">Payment (${p.mode || 'Cash'})</td>
+        <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
       </tr>`).join('')}
       <tr class="total-row">
-        <td colspan="4" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
+        <td colspan="4" class="left"><strong>GRAND TOTAL</strong></td>
         <td>&mdash;</td>
-        <td style="text-align:right;"><strong>${fmt(lessQty)}</strong></td>
-        <td style="text-align:right;"><strong>${fmt(netQty)}</strong></td>
+        <td class="num"><strong>${fmt(lessQty)}</strong></td>
+        <td class="num"><strong>${fmt(netQty)}</strong></td>
         <td>&mdash;</td>
         <td>&mdash;</td>
-        <td class="total-amount" style="text-align:right;">&#8377;${fmt(totalAmt)}</td>
+        <td class="num total-amount">${RS}${fmt(totalAmt)}</td>
       </tr>
     </tbody>
   </table>
 </div>
+
 <div class="summary-box">
   <div class="summary-row gross">
     <span class="summary-label">Total Amount</span>
-    <span class="summary-value" style="color:#2d6a2d;">&#8377;${fmt(totalAmt)}</span>
+    <span class="summary-value" style="color:#1a5c1a;">${RS}${fmt(totalAmt)}</span>
   </div>
-  ${advance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">- &#8377;${fmt(advance)}</span></div>` : ''}
-  ${totalPaid > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">- &#8377;${fmt(totalPaid)}</span></div>` : ''}
-  <div class="summary-row due-row">
+  ${advance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">-${RS}${fmt(advance)}</span></div>` : ''}
+  ${totalPaid > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">-${RS}${fmt(totalPaid)}</span></div>` : ''}
+  <div class="summary-row ${due > 0 ? 'due-row-neg' : 'due-row-pos'}">
     <span class="summary-label">${due > 0 ? 'Balance Due' : 'Status'}</span>
-    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#2d6a2d'};">${due > 0 ? '&#8377;' + fmt(due) : '&#10003; CLEARED'}</span>
+    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#1a5c1a'};">${due > 0 ? RS + fmt(due) : '&#10003; CLEARED'}</span>
   </div>
 </div>
-<div class="amount-words">TOTAL AMOUNT &gt; ${numberToWords(totalAmt)}</div>
+
+<div class="amount-words">TOTAL AMOUNT &rarr; ${numberToWords(totalAmt)}</div>
+
 <hr />
+
 <div class="footer-company">
-  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="co-name">DOOARS GREEN FPO</div>
   <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
   <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
 </div>
+
 <div class="signatures">
   <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Authorized By</div></div>
   <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Received By</div></div>
 </div>
-</body></html>`;
+
+</body>
+</html>`;
 }
 
 // ── Controller: Factory Invoice ────────────────────────────────────────────────
-/**
- * GET /api/factory/:id/invoice
- * GET /api/factory/:id/invoice?format=html   (browser preview)
- * NEW function — does NOT modify any existing controller.
- */
 exports.generateFactoryInvoice = async (req, res) => {
   try {
     const { id }  = req.params;
     const format  = (req.query.format || 'pdf').toLowerCase();
     const Factory = require('../models/Factory');
-
-    console.log(`[invoiceController.generateFactoryInvoice] id=${id} format=${format}`);
 
     const record = await Factory.findById(id);
     if (!record) {
@@ -1200,11 +1138,11 @@ exports.generateFactoryInvoice = async (req, res) => {
     const html = buildFactoryInvoiceHtml(record.toObject({ virtuals: true }));
 
     if (format === 'html') {
-      return res.setHeader('Content-Type', 'text/html').send(html);
+      return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
     }
 
     const buffer    = await generatePdf(html);
-    const safeBuyer = (record.buyerName || 'factory').replace(/\s+/g, '_').toUpperCase();
+    const safeBuyer = (record.buyerName || 'factory').replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
     const safeDate  = fmtDate(record.date).replace(/\//g, '-');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="factory-invoice-${safeBuyer}-${safeDate}.pdf"`);
@@ -1216,179 +1154,168 @@ exports.generateFactoryInvoice = async (req, res) => {
   }
 };
 
-// ── Build Multi-Record Factory Invoice HTML ──────────────────────────────────
+// ── Build Multi-Record Factory Invoice HTML ───────────────────────────────────
 function buildMultiFactoryInvoiceHtml(buyerName, records) {
   const logoImg = LOGO_BASE64
     ? `<img src="${LOGO_BASE64}" alt="logo" class="logo-img" />`
     : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
 
   const invoiceDate = fmtDateLong(new Date());
-  
-  let grandTotalQty = 0;
-  let grandLessQty = 0;
-  let grandNetQty = 0;
-  let grandTotalAmt = 0;
-  let grandAdvance = 0;
-  let grandPaid = 0;
+
+  let grandTotalQty = 0, grandLessQty = 0, grandNetQty = 0;
+  let grandTotalAmt = 0, grandAdvance = 0, grandPaid = 0;
 
   const dataRows = records.map((record, i) => {
-    const qty       = record.totalQuantity  || 0;
-    const lessPct   = record.lessPercentage || 0;
-    const lessQty   = parseFloat(((qty * lessPct) / 100).toFixed(2));
-    const netQty    = parseFloat((qty - lessQty).toFixed(2));
-    const fine      = record.fineLeaf       || 0;
-    const rate      = record.rate           || 0;
-    const totalAmt  = parseFloat((netQty * rate).toFixed(2));
-    const advance   = record.advance        || 0;
+    const qty      = record.totalQuantity  || 0;
+    const lessPct  = record.lessPercentage || 0;
+    const lessQty  = parseFloat(((qty * lessPct) / 100).toFixed(2));
+    const netQty   = parseFloat((qty - lessQty).toFixed(2));
+    const fine     = record.fineLeaf       || 0;
+    const rate     = record.rate           || 0;
+    const totalAmt = parseFloat((netQty * rate).toFixed(2));
+    const advance  = record.advance        || 0;
     const totalPaid = (record.payments || []).reduce((s, p) => s + (parseFloat(p.amount) || 0), 0);
-    
-    grandTotalQty += qty;
-    grandLessQty += lessQty;
-    grandNetQty += netQty;
-    grandTotalAmt += totalAmt;
-    grandAdvance += advance;
-    grandPaid += totalPaid;
 
-    // Create sub-rows for payments
-    const payments = record.payments || [];
-    const paymentRows = payments.map(p => `
-      <tr class="row-even" style="font-style: italic; color: #444; background: #fafafa;">
-        <td style="text-align:center;"></td>
-        <td style="text-align:center;">${fmtDate(p.date)}</td>
-        <td colspan="7" style="text-align: right; padding-right: 15px;">Payment (${p.mode || 'Cash'})</td>
-        <td style="color: #2d6a2d; font-weight: bold; text-align:right;">- &#8377;${fmt(p.amount)}</td>
-      </tr>
-    `).join('');
+    grandTotalQty += qty;
+    grandLessQty  += lessQty;
+    grandNetQty   += netQty;
+    grandTotalAmt += totalAmt;
+    grandAdvance  += advance;
+    grandPaid     += totalPaid;
+
+    const paymentRows = (record.payments || []).map(p => `
+      <tr class="row-even" style="font-style:italic;color:#555;">
+        <td></td>
+        <td>${fmtDate(p.date)}</td>
+        <td colspan="7" style="text-align:right;padding-right:10px;">Payment (${p.mode || 'Cash'})</td>
+        <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
+      </tr>`).join('');
 
     return `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
         <td style="text-align:center;">${i + 1}</td>
-        <td style="text-align:center;">${fmtDate(record.date)}</td>
-        <td style="text-align:center;font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
-        <td style="text-align:right;">${fmt(qty)}</td>
-        <td style="text-align:right;">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
-        <td style="text-align:right;">${fmt(lessQty)}</td>
-        <td style="text-align:right;font-weight:bold;color:#2d6a2d;">${fmt(netQty)}</td>
-        <td style="text-align:right;">${fine > 0 ? fine + '%' : '&mdash;'}</td>
-        <td style="text-align:right;">${fmt(rate)}</td>
-        <td style="text-align:right;font-weight:bold;">&#8377;${fmt(totalAmt)}</td>
+        <td>${fmtDate(record.date)}</td>
+        <td style="font-weight:bold;color:#444;">${record.teaType || 'CTC'}</td>
+        <td class="num">${fmt(qty)}</td>
+        <td class="num">${lessPct > 0 ? lessPct + '%' : '&mdash;'}</td>
+        <td class="num">${fmt(lessQty)}</td>
+        <td class="num" style="font-weight:bold;color:#1a5c1a;">${fmt(netQty)}</td>
+        <td class="num">${fine > 0 ? fine + '%' : '&mdash;'}</td>
+        <td class="num">${RS}${fmt(rate)}</td>
+        <td class="num" style="font-weight:bold;">${RS}${fmt(totalAmt)}</td>
       </tr>
-      ${paymentRows}
-    `;
+      ${paymentRows}`;
   }).join('');
 
   const due = parseFloat((grandTotalAmt - grandAdvance - grandPaid).toFixed(2));
 
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8" />
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
 <title>Factory Statement - ${buyerName}</title>
-<style>
-* { margin:0;padding:0;box-sizing:border-box; }
-body { font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#222;background:#fff;padding:16px 20px; }
-.watermark-bg { position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);width:460px;height:460px;opacity:0.1;z-index:-10;pointer-events:none; }
-.watermark-bg img { width:100%;height:100%;object-fit:contain; }
-.header { display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #2d6a2d;margin-bottom:12px;position:relative;z-index:1; }
-.logo-img { width:90px;height:90px;object-fit:contain; }
-.logo-placeholder { width:90px;height:90px;background:#2d6a2d;color:#fff;font-weight:bold;font-size:10px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:4px;line-height:1.3; }
-.header-right { text-align:right; }
-.voucher-title { font-size:15px;font-weight:900;color:#2d6a2d;letter-spacing:0.5px;text-transform:uppercase; }
-.invoice-date { font-size:13px;color:#333;margin:3px 0; }
-.invoice-no { font-size:14px;font-weight:800;color:#1a1a1a;text-transform:uppercase; }
-.billed-section { margin-bottom:14px;position:relative;z-index:1; }
-.billed-label { font-size:12px;font-weight:900;color:#2d6a2d;text-transform:uppercase;margin-bottom:4px; }
-.billed-name { font-size:13px;font-weight:700;text-transform:uppercase;color:#111; }
-hr { border:none;border-top:1.5px solid #2d6a2d;margin:10px 0; }
-.table-wrapper { position:relative;z-index:1;overflow-x:auto; }
-table { width:100%;border-collapse:collapse;font-size:10.5px; }
-thead tr { background:#2d6a2d;color:#fff; }
-thead th { padding:8px 6px;text-align:center;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:0.3px; }
-tbody td { padding:7px 6px;text-align:center;border-bottom:1px solid #e0e0e0; }
-.row-even { background:#fafafa; } .row-odd { background:#f0f7f0; }
-.total-row td { background:#f0f7f0;font-weight:700;border-top:2px solid #2d6a2d;border-bottom:2px solid #2d6a2d; }
-.total-amount { color:#2d6a2d;font-size:12px;font-weight:900; }
-.summary-box { margin:14px 0;display:flex;flex-direction:column;gap:6px;position:relative;z-index:1; }
-.summary-row { display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-radius:4px; }
-.summary-row.gross   { background:#f0f7f0;border:1px solid #2d6a2d; }
-.summary-row.advance { background:#fff8ec;border:1px solid #e8c95a; }
-.summary-row.due-row { background:${due > 0 ? '#fff1f1' : '#f0fff0'};border:1px solid ${due > 0 ? '#c0392b' : '#2d6a2d'}; }
-.summary-label { font-weight:700;font-size:11px;color:#333;text-transform:uppercase; }
-.summary-value { font-weight:900;font-size:13px; }
-.amount-words { background:#f5fff5;border:1.5px solid #2d6a2d;border-radius:3px;padding:8px 12px;font-size:11.5px;font-weight:800;color:#1a4f1a;text-transform:uppercase;letter-spacing:0.3px;margin:10px 0;position:relative;z-index:1; }
-.footer-company { margin-top:8px;padding-top:8px;border-top:1.5px solid #2d6a2d;position:relative;z-index:1; }
-.footer-company .company-name { font-size:13px;font-weight:900;color:#2d6a2d;text-transform:uppercase; }
-.footer-company .contact { font-size:10px;color:#444;margin-top:2px; }
-.signatures { display:flex;justify-content:space-between;margin-top:40px;position:relative;z-index:1; }
-.sig-block { text-align:center;width:200px; }
-.sig-line { border-top:1.5px solid #333;margin-bottom:5px; }
-.sig-label { font-size:11px;color:#333;font-weight:600; }
-@media print { body { padding:10px 15px; } }
-</style></head><body>
+<style>${SHARED_CSS}
+  .due-row-pos { background:#f0fff0; border:1px solid #2d6a2d; }
+  .due-row-neg { background:#fff1f1; border:1px solid #c0392b; }
+</style>
+</head>
+<body>
+
 ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="watermark" /></div>` : ''}
+
 <div class="header">
   <div class="logo-col">${logoImg}</div>
+  <div class="header-center">
+    <div class="company-main">DOOARS GREEN FPO</div>
+    <div class="company-sub">Factory Statement</div>
+  </div>
   <div class="header-right">
-    <div class="voucher-title">DOOARS GREEN FPO &mdash; FACTORY STATEMENT</div>
+    <div class="voucher-title">Factory Statement</div>
     <div class="invoice-date">${invoiceDate}</div>
   </div>
 </div>
+
 <div class="billed-section">
-  <div class="billed-label">BUYER / PARTY:</div>
+  <div class="billed-label">Buyer / Party:</div>
   <div class="billed-name">${buyerName}</div>
 </div>
+
 <hr />
+
 <div class="table-wrapper">
   <table>
-    <thead><tr>
-      <th style="text-align:center;width:40px;">Sl No.</th>
-      <th style="text-align:center;">Date</th>
-      <th style="text-align:center;">Tea Type</th>
-      <th style="text-align:right;">Total QTY<br/>(kg)</th>
-      <th style="text-align:right;">Less %</th>
-      <th style="text-align:right;">Less QTY<br/>(kg)</th>
-      <th style="text-align:right;">Net QNTY<br/>(kg)</th>
-      <th style="text-align:right;">Fine %</th>
-      <th style="text-align:right;">Rate<br/>(&#8377;/kg)</th>
-      <th style="text-align:right;">Total AMT.<br/>(&#8377;)</th>
-    </tr></thead>
+    <colgroup>
+      <col style="width:5%">
+      <col style="width:9%">
+      <col style="width:10%">
+      <col style="width:10%">
+      <col style="width:7%">
+      <col style="width:10%">
+      <col style="width:10%">
+      <col style="width:7%">
+      <col style="width:11%">
+      <col style="width:11%">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>SL</th>
+        <th>DATE</th>
+        <th>TEA TYPE</th>
+        <th class="num">TOTAL QTY (KG)</th>
+        <th class="num">LESS%</th>
+        <th class="num">LESS QTY (KG)</th>
+        <th class="num">NET QTY (KG)</th>
+        <th class="num">FINE%</th>
+        <th class="num">RATE (${RS}/KG)</th>
+        <th class="num">TOTAL AMT (${RS})</th>
+      </tr>
+    </thead>
     <tbody>
       ${dataRows}
       <tr class="total-row">
-        <td colspan="3" style="text-align:left;padding-left:8px;"><strong>GRAND TOTAL</strong></td>
-        <td style="text-align:right;"><strong>${fmt(grandTotalQty)}</strong></td>
+        <td colspan="3" class="left"><strong>GRAND TOTAL</strong></td>
+        <td class="num"><strong>${fmt(grandTotalQty)}</strong></td>
         <td>&mdash;</td>
-        <td style="text-align:right;"><strong>${fmt(grandLessQty)}</strong></td>
-        <td style="text-align:right;color:#2d6a2d;"><strong>${fmt(grandNetQty)}</strong></td>
+        <td class="num"><strong>${fmt(grandLessQty)}</strong></td>
+        <td class="num" style="color:#1a5c1a;"><strong>${fmt(grandNetQty)}</strong></td>
         <td>&mdash;</td>
         <td>&mdash;</td>
-        <td class="total-amount" style="text-align:right;">&#8377;${fmt(grandTotalAmt)}</td>
+        <td class="num total-amount">${RS}${fmt(grandTotalAmt)}</td>
       </tr>
     </tbody>
   </table>
 </div>
+
 <div class="summary-box">
   <div class="summary-row gross">
     <span class="summary-label">Total Amount</span>
-    <span class="summary-value" style="color:#2d6a2d;">&#8377;${fmt(grandTotalAmt)}</span>
+    <span class="summary-value" style="color:#1a5c1a;">${RS}${fmt(grandTotalAmt)}</span>
   </div>
-  ${grandAdvance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">- &#8377;${fmt(grandAdvance)}</span></div>` : ''}
-  ${grandPaid > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">- &#8377;${fmt(grandPaid)}</span></div>` : ''}
-  <div class="summary-row due-row">
+  ${grandAdvance > 0 ? `<div class="summary-row advance"><span class="summary-label">Advance Paid</span><span class="summary-value" style="color:#b8860b;">-${RS}${fmt(grandAdvance)}</span></div>` : ''}
+  ${grandPaid    > 0 ? `<div class="summary-row advance"><span class="summary-label">Payments Received</span><span class="summary-value" style="color:#c0392b;">-${RS}${fmt(grandPaid)}</span></div>` : ''}
+  <div class="summary-row ${due > 0 ? 'due-row-neg' : 'due-row-pos'}">
     <span class="summary-label">${due > 0 ? 'Balance Due' : 'Status'}</span>
-    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#2d6a2d'};">${due > 0 ? '&#8377;' + fmt(due) : '&#10003; CLEARED'}</span>
+    <span class="summary-value" style="color:${due > 0 ? '#c0392b' : '#1a5c1a'};">${due > 0 ? RS + fmt(due) : '&#10003; CLEARED'}</span>
   </div>
 </div>
-<div class="amount-words">TOTAL AMOUNT &gt; ${numberToWords(grandTotalAmt)}</div>
+
+<div class="amount-words">TOTAL AMOUNT &rarr; ${numberToWords(grandTotalAmt)}</div>
+
 <hr />
+
 <div class="footer-company">
-  <div class="company-name">DOOARS GREEN FPO</div>
+  <div class="co-name">DOOARS GREEN FPO</div>
   <div class="contact">Email &ndash; dooarsgreenfpo@gmail.com</div>
   <div class="contact">Cont &ndash; 9800415644, 8101507292, 8972495852, 8967829553</div>
 </div>
+
 <div class="signatures">
   <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Authorized By</div></div>
   <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Received By</div></div>
 </div>
-</body></html>`;
+
+</body>
+</html>`;
 }
 
 // ── Controller: Factory Multi-Invoice By Buyer ─────────────────────────────────
@@ -1396,14 +1323,14 @@ exports.generateFactoryInvoiceByBuyer = async (req, res) => {
   try {
     const { buyerName } = req.query;
     const format = (req.query.format || 'pdf').toLowerCase();
-    
+
     if (!buyerName) {
       return res.status(400).json({ success: false, message: 'buyerName is required' });
     }
 
     const Factory = require('../models/Factory');
-    const records = await Factory.find({ 
-      buyerName: { $regex: new RegExp(`^${buyerName.trim()}$`, 'i') } 
+    const records = await Factory.find({
+      buyerName: { $regex: new RegExp(`^${buyerName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
     }).sort('date').lean({ virtuals: true });
 
     if (!records || records.length === 0) {
@@ -1413,11 +1340,11 @@ exports.generateFactoryInvoiceByBuyer = async (req, res) => {
     const html = buildMultiFactoryInvoiceHtml(buyerName, records);
 
     if (format === 'html') {
-      return res.setHeader('Content-Type', 'text/html').send(html);
+      return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
     }
 
-    const buffer = await generatePdf(html);
-    const safeBuyer = buyerName.replace(/\s+/g, '_').toUpperCase();
+    const buffer    = await generatePdf(html);
+    const safeBuyer = buyerName.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="factory-statement-${safeBuyer}-${Date.now()}.pdf"`);
     res.send(buffer);
