@@ -897,7 +897,7 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
 async function generatePdf(html) {
   const { default: puppeteer } = await import('puppeteer-core');
 
-  let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+  let executablePath = null;
   let launchArgs = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -908,11 +908,23 @@ async function generatePdf(html) {
     '--disable-extensions',
     '--font-render-hinting=none',
   ];
-  let headlessMode = 'shell';   // 'shell' operates completely headless without DBUS/X11, which prevents crashes on Railway containers.
+  let headlessMode = 'shell';
 
-  // Only use sparticus automatically on Linux/Serverless environments because it crashes on Windows development servers.
+  // Always use sparticuz automatically on Linux/Serverless environments.
   const isServerless = process.platform !== 'win32';
 
+  // if (isServerless) {
+  //   try {
+  //     const sparticuz = (await import('@sparticuz/chromium')).default;
+  //     sparticuz.setGraphicsMode = false;
+  //     executablePath  = await sparticuz.executablePath();
+  //     launchArgs      = sparticuz.args;
+  //     headlessMode    = sparticuz.headless;
+  //     console.log('[generatePdf] Using @sparticuz/chromium at:', executablePath);
+  //   } catch (e) {
+  //     console.error('[generatePdf] Sparticuz failed, falling back:', e.message);
+  //   }
+  // }
   if (!executablePath && isServerless) {
     try {
       const sparticuz = (await import('@sparticuz/chromium')).default;
@@ -920,33 +932,35 @@ async function generatePdf(html) {
       launchArgs      = sparticuz.args;
       headlessMode    = sparticuz.headless;
       console.log('[generatePdf] Using @sparticuz/chromium at:', executablePath);
-    } catch (_) {
-      // fallback
+    } catch (err) {
+      console.error('[generatePdf] sparticuz failed to load:', err);
     }
   }
 
-  // Platform defaults when no env var and no sparticuz
+  // Fallback to Env variable or Platform defaults
   if (!executablePath) {
-    if (process.platform === 'win32') {
-      const winPaths = [
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files\\Chromium\\Application\\chromium.exe',
-      ];
-      executablePath = winPaths.find(p => {
-        try { require('fs').accessSync(p); return true; } catch { return false; }
-      }) || winPaths[0];
-    } else {
-      // Linux — common paths
-      const linuxPaths = [
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-      ];
-      executablePath = linuxPaths.find(p => {
-        try { require('fs').accessSync(p); return true; } catch { return false; }
-      }) || '/usr/bin/chromium';
+    executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || null;
+    
+    if (!executablePath) {
+      if (process.platform === 'win32') {
+        const winPaths = [
+          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          'C:\\Program Files\\Chromium\\Application\\chromium.exe',
+        ];
+        executablePath = winPaths.find(p => {
+          try { require('fs').accessSync(p); return true; } catch { return false; }
+        }) || winPaths[0];
+      } else {
+        const linuxPaths = [
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium',
+          '/usr/bin/google-chrome',
+        ];
+        executablePath = linuxPaths.find(p => {
+          try { require('fs').accessSync(p); return true; } catch { return false; }
+        }) || '/usr/bin/chromium';
+      }
     }
     console.log('[generatePdf] Using platform default Chromium at:', executablePath);
   }
