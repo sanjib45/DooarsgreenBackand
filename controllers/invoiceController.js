@@ -908,7 +908,7 @@ async function generatePdf(html) {
     '--disable-extensions',
     '--font-render-hinting=none',
   ];
-  let headlessMode = true;   // For puppeteer v22+, use true or 'shell'. 'new' is deprecated and crashes on unsupported Linux containers via DBUS request.
+  let headlessMode = 'shell';   // 'shell' operates completely headless without DBUS/X11, which prevents crashes on Railway containers.
 
   // Only use sparticus automatically on Linux/Serverless environments because it crashes on Windows development servers.
   const isServerless = process.platform !== 'win32';
