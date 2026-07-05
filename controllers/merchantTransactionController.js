@@ -1,55 +1,120 @@
 const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantPayment     = require('../models/MerchantPayment');
+const Merchant            = require('../models/Merchant');
 const { validationResult } = require('express-validator');
-
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 function genTxnId() {
   return 'TXN-' + Date.now().toString().slice(-7) + Math.floor(Math.random() * 9 + 1);
 }
 
-// ── GET /api/merchant-transactions ────────────────────────────────────────────
+/**
+ * GET /api/merchant-transactions
+ * Combined AND filter support:
+ *   search    – partial case-insensitive match on merchantName OR merchantPhone
+ *   phone     – explicit phone filter (looks up Merchant, then filters by merchantId)
+ *   teaType   – exact match
+ *   startDate / endDate – inclusive date range
+ */
 exports.getAll = async (req, res) => {
   try {
     const {
-      merchantName, teaType,
+      merchantName, teaType, search, phone,
       sort = '-transactionDate',
       page = 1, limit = 20,
-      search,
       startDate, endDate,
     } = req.query;
 
-    const filter = {};
-    if (teaType) filter.teaType = teaType;
-    if (merchantName) filter.merchantName = { $regex: merchantName, $options: 'i' };
-    if (search) filter.merchantName = { $regex: search, $options: 'i' };
-    if (startDate || endDate) {
-      filter.transactionDate = {};
-      if (startDate) filter.transactionDate.$gte = new Date(startDate);
-      if (endDate) {
-        // Include the full end day by setting time to 23:59:59.999
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.transactionDate.$lte = end;
+    const andConditions = [];
+
+    // ── Tea type filter ──────────────────────────────────────────────────────
+    if (teaType && teaType.trim()) {
+      andConditions.push({ teaType });
+    }
+
+    // ── Merchant name filter (explicit) ──────────────────────────────────────
+    if (merchantName && merchantName.trim()) {
+      andConditions.push({
+        merchantName: {
+          $regex: merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+          $options: 'i',
+        },
+      });
+    }
+
+    // ── Combined search: name OR phone ───────────────────────────────────────
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(
+        search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'
+      );
+
+      // Find merchants whose phone matches
+      const matchedMerchants = await Merchant.find({ phone: searchRegex }).select('_id').lean();
+      const merchantIds = matchedMerchants.map(m => m._id);
+
+      const orClauses = [
+        { merchantName: searchRegex },
+        { merchantPhone: searchRegex },
+      ];
+      if (merchantIds.length > 0) {
+        orClauses.push({ merchant: { $in: merchantIds } });
+      }
+
+      andConditions.push({ $or: orClauses });
+    }
+
+    // ── Explicit phone filter ────────────────────────────────────────────────
+    if (phone && phone.trim()) {
+      const phoneRegex = new RegExp(
+        phone.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'
+      );
+      const matchedByPhone = await Merchant.find({ phone: phoneRegex }).select('_id').lean();
+      const ids = matchedByPhone.map(m => m._id);
+
+      if (ids.length > 0) {
+        andConditions.push({
+          $or: [
+            { merchant: { $in: ids } },
+            { merchantPhone: phoneRegex },
+          ],
+        });
+      } else {
+        // No merchant found with this phone — short circuit
+        return res.json({
+          success: true,
+          data: [],
+          pagination: { total: 0, page: parseInt(page), pages: 0 },
+        });
       }
     }
 
+    // ── Date range filter ────────────────────────────────────────────────────
+    if (startDate || endDate) {
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        dateFilter.$lte = end;
+      }
+      andConditions.push({ transactionDate: dateFilter });
+    }
+
+    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [items, total] = await Promise.all([
-      MerchantTransaction.find(filter).sort(sort).skip(skip).limit(parseInt(limit)),
+      MerchantTransaction.find(filter).sort(sort).skip(skip).limit(parseInt(limit)).lean(),
       MerchantTransaction.countDocuments(filter),
     ]);
 
     res.json({
       success: true,
       data: items,
-      pagination: {
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / parseInt(limit)),
-      },
+      pagination: { total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) },
     });
   } catch (err) {
+    console.error('[merchantTransactionController.getAll]', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
