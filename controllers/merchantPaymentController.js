@@ -7,14 +7,15 @@ function genPaymentId() {
 }
 
 // ── GET /api/merchant-transactions/:txnId/payments ───────────────────────────
-// Returns all payments + transaction summary
+// Returns all payments + transaction summary — SCOPED by createdBy
 exports.getForTransaction = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { txnId } = req.params;
 
     const [transaction, payments] = await Promise.all([
-      MerchantTransaction.findById(txnId),
-      MerchantPayment.find({ transaction: txnId }).sort('-paymentDate'),
+      MerchantTransaction.findOne({ _id: txnId, createdBy: userId }),
+      MerchantPayment.find({ transaction: txnId, createdBy: userId }).sort('-paymentDate'),
     ]);
 
     if (!transaction) {
@@ -43,6 +44,7 @@ exports.getForTransaction = async (req, res) => {
 };
 
 // ── POST /api/merchant-transactions/:txnId/payments ──────────────────────────
+// SCOPED: stamps createdBy and verifies transaction ownership
 exports.create = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -50,15 +52,16 @@ exports.create = async (req, res) => {
   }
 
   try {
+    const userId = req.user._id;
     const { txnId } = req.params;
 
-    const transaction = await MerchantTransaction.findById(txnId);
+    const transaction = await MerchantTransaction.findOne({ _id: txnId, createdBy: userId });
     if (!transaction) {
       return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
 
-    // Check total paid so far
-    const existingPayments = await MerchantPayment.find({ transaction: txnId });
+    // Check total paid so far (scoped)
+    const existingPayments = await MerchantPayment.find({ transaction: txnId, createdBy: userId });
     const totalAlreadyPaid = existingPayments.reduce((sum, p) => sum + p.amount, 0);
     const remaining = Math.round((transaction.finalPayable - totalAlreadyPaid) * 100) / 100;
 
@@ -78,6 +81,7 @@ exports.create = async (req, res) => {
 
     const payment = await MerchantPayment.create({
       ...req.body,
+      createdBy: userId,
       paymentId: genPaymentId(),
       transaction: txnId,
       merchant: transaction.merchant,
@@ -110,20 +114,23 @@ exports.create = async (req, res) => {
 };
 
 // ── DELETE /api/merchant-transactions/:txnId/payments/:payId ─────────────────
+// SCOPED: only deletes if payment belongs to the logged-in user
 exports.remove = async (req, res) => {
   try {
+    const userId = req.user._id;
     const payment = await MerchantPayment.findOneAndDelete({
       _id: req.params.payId,
       transaction: req.params.txnId,
+      createdBy: userId,
     });
     if (!payment) {
       return res.status(404).json({ success: false, message: 'Payment not found' });
     }
 
-    // Recalculate and update the transaction balance
-    const transaction = await MerchantTransaction.findById(req.params.txnId);
+    // Recalculate and update the transaction balance (scoped)
+    const transaction = await MerchantTransaction.findOne({ _id: req.params.txnId, createdBy: userId });
     if (transaction) {
-      const existingPayments = await MerchantPayment.find({ transaction: req.params.txnId });
+      const existingPayments = await MerchantPayment.find({ transaction: req.params.txnId, createdBy: userId });
       const totalPaid = existingPayments.reduce((sum, p) => sum + p.amount, 0);
       transaction.balance = Math.round((transaction.finalPayable - totalPaid) * 100) / 100;
       await transaction.save();

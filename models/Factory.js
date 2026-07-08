@@ -7,6 +7,12 @@ const paymentSchema = new mongoose.Schema({
 }, { _id: true });
 
 const factorySchema = new mongoose.Schema({
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Owner user reference is required'],
+    index: true,
+  },
   date:            { type: Date, default: Date.now },
   buyer:           { type: mongoose.Schema.Types.ObjectId, ref: 'Buyer', index: true },
   buyerName:       { type: String, required: [true, 'Buyer name is required'], trim: true, index: true },
@@ -21,8 +27,8 @@ const factorySchema = new mongoose.Schema({
   remarks:         { type: String, trim: true, maxlength: 500 },
 }, { timestamps: true });
 
-factorySchema.index({ buyer: 1, date: -1 });
-factorySchema.index({ date: -1 });
+factorySchema.index({ createdBy: 1, buyer: 1, date: -1 });
+factorySchema.index({ createdBy: 1, date: -1 });
 
 // ── Virtuals ────────────────────────────────────────────────
 // All virtuals use safe fallbacks (|| 0, || []) so that OLD MongoDB

@@ -2,8 +2,14 @@ const mongoose = require('mongoose');
 
 const buyerSchema = new mongoose.Schema(
   {
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Owner user reference is required'],
+      index: true,
+    },
     name:    { type: String, required: [true, 'Buyer name is required'], trim: true, maxlength: 100 },
-    phone:   { type: String, required: [true, 'Phone number is required'], unique: true, trim: true, maxlength: 15 },
+    phone:   { type: String, required: [true, 'Phone number is required'], trim: true, maxlength: 15 },
     address: { type: String, trim: true, maxlength: 200, default: '' },
     notes:   { type: String, trim: true, maxlength: 500, default: '' },
   },
@@ -11,6 +17,7 @@ const buyerSchema = new mongoose.Schema(
 );
 
 buyerSchema.index({ name: 'text' });
-buyerSchema.index({ phone: 1 }, { unique: true });
+buyerSchema.index({ phone: 1, createdBy: 1 }, { unique: true }); // Per-user phone uniqueness
+buyerSchema.index({ createdBy: 1, name: 1 });                    // Fast user-scoped lookup
 
 module.exports = mongoose.model('Buyer', buyerSchema);

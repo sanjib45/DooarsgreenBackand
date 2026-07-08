@@ -7,6 +7,12 @@ const mongoose = require('mongoose');
  */
 const merchantAdvanceSchema = new mongoose.Schema(
   {
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Owner user reference is required'],
+      index: true,
+    },
     merchant: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Merchant',

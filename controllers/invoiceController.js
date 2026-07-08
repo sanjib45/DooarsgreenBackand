@@ -550,15 +550,16 @@ ${txn.advancePayment > 0 ? `
 </html>`;
 }
 
-// ── Controller 1: single transaction ──────────────────────────────────────────
+// ── Controller 1: single transaction — SCOPED by createdBy ───────────────────
 exports.generateInvoice = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { id } = req.params;
     const format  = (req.query.format || 'pdf').toLowerCase();
 
     const [txn, payments] = await Promise.all([
-      MerchantTransaction.findById(id).lean(),
-      MerchantPayment.find({ transaction: id }).sort('paymentDate').lean(),
+      MerchantTransaction.findOne({ _id: id, createdBy: userId }).lean(),
+      MerchantPayment.find({ transaction: id, createdBy: userId }).sort('paymentDate').lean(),
     ]);
 
     if (!txn) {
@@ -812,8 +813,10 @@ ${totals.advancePayment > 0 ? `
 }
 
 // ── Controller 2: all transactions for a merchant on a given date / range ────────
+// SCOPED by createdBy — users can only generate invoices for their own data
 exports.generateInvoiceByMerchantDate = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { merchantName, date, startDate, endDate, format = 'pdf' } = req.query;
 
     if (!merchantName) {
@@ -836,6 +839,7 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
     rangeEnd.setHours(23, 59, 59, 999);
 
     const transactions = await MerchantTransaction.find({
+      createdBy: userId,
       merchantName:    { $regex: new RegExp(`^${merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
       transactionDate: { $gte: rangeStart, $lte: rangeEnd },
     }).sort('transactionDate').lean();
@@ -850,8 +854,11 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
 
     const txnIds = transactions.map((t) => t._id);
     const [allPayments, merchant] = await Promise.all([
-      MerchantPayment.find({ transaction: { $in: txnIds } }).lean(),
-      Merchant.findOne({ name: { $regex: new RegExp(`^${merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }).lean(),
+      MerchantPayment.find({ transaction: { $in: txnIds }, createdBy: userId }).lean(),
+      Merchant.findOne({
+        createdBy: userId,
+        name: { $regex: new RegExp(`^${merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      }).lean(),
     ]);
 
     const paymentsMap = {};
@@ -864,6 +871,7 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
     let standaloneAdvances = [];
     if (merchant) {
       standaloneAdvances = await MerchantAdvance.find({
+        createdBy: userId,
         merchant:    merchant._id,
         advanceDate: { $gte: rangeStart, $lte: rangeEnd },
       }).sort('advanceDate').lean();
@@ -1333,8 +1341,10 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 }
 
 // ── Controller: Factory Multi-Invoice By Buyer ─────────────────────────────────
+// SCOPED by createdBy — users can only generate invoices for their own data
 exports.generateFactoryInvoiceByBuyer = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { buyerName } = req.query;
     const format = (req.query.format || 'pdf').toLowerCase();
 
@@ -1344,6 +1354,7 @@ exports.generateFactoryInvoiceByBuyer = async (req, res) => {
 
     const Factory = require('../models/Factory');
     const records = await Factory.find({
+      createdBy: userId,
       buyerName: { $regex: new RegExp(`^${buyerName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
     }).sort('date').lean({ virtuals: true });
 
@@ -1368,3 +1379,4 @@ exports.generateFactoryInvoiceByBuyer = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to generate factory statement: ' + err.message });
   }
 };
+
