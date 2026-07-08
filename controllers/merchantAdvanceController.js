@@ -7,14 +7,22 @@ function genAdvanceId() {
 }
 
 // ── GET /api/merchants/:merchantId/advances ────────────────────────────────────
+// SCOPED: only returns advances for this user's merchant
 exports.getForMerchant = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { merchantId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(merchantId)) {
       return res.status(400).json({ success: false, message: 'Invalid merchant ID' });
     }
 
-    const advances = await MerchantAdvance.find({ merchant: merchantId })
+    // Verify merchant belongs to this user
+    const merchant = await Merchant.findOne({ _id: merchantId, createdBy: userId }).lean();
+    if (!merchant) {
+      return res.status(404).json({ success: false, message: 'Merchant not found' });
+    }
+
+    const advances = await MerchantAdvance.find({ merchant: merchantId, createdBy: userId })
       .sort('-advanceDate')
       .lean();
 
@@ -33,14 +41,17 @@ exports.getForMerchant = async (req, res) => {
 };
 
 // ── POST /api/merchants/:merchantId/advances ───────────────────────────────────
+// SCOPED: stamps createdBy and verifies merchant ownership
 exports.create = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { merchantId } = req.params;
     if (!mongoose.Types.ObjectId.isValid(merchantId)) {
       return res.status(400).json({ success: false, message: 'Invalid merchant ID' });
     }
 
-    const merchant = await Merchant.findById(merchantId).lean();
+    // Verify merchant belongs to this user
+    const merchant = await Merchant.findOne({ _id: merchantId, createdBy: userId }).lean();
     if (!merchant) {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
@@ -52,6 +63,7 @@ exports.create = async (req, res) => {
     }
 
     const advance = await MerchantAdvance.create({
+      createdBy: userId,
       merchant: merchantId,
       merchantName: merchant.name,
       advanceId: genAdvanceId(),
@@ -71,12 +83,15 @@ exports.create = async (req, res) => {
 };
 
 // ── DELETE /api/merchants/:merchantId/advances/:advanceId ──────────────────────
+// SCOPED: only deletes if advance belongs to the logged-in user
 exports.remove = async (req, res) => {
   try {
+    const userId = req.user._id;
     const { merchantId, advanceId } = req.params;
     const advance = await MerchantAdvance.findOneAndDelete({
       _id: advanceId,
       merchant: merchantId,
+      createdBy: userId,
     });
     if (!advance) {
       return res.status(404).json({ success: false, message: 'Advance not found' });

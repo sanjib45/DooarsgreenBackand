@@ -2,8 +2,10 @@ const Labor = require('../models/Labor');
 const { validationResult } = require('express-validator');
 
 // ── GET /api/labor ────────────────────────────────────────────────────────────
+// SCOPED: only returns labors created by the logged-in user
 exports.getAll = async (req, res) => {
   try {
+    const userId = req.user._id;
     const {
       role,
       paymentStatus,
@@ -13,7 +15,7 @@ exports.getAll = async (req, res) => {
       limit = 50,
     } = req.query;
 
-    const filter = {};
+    const filter = { createdBy: userId };
     if (role)          filter.role          = role;
     if (paymentStatus) filter.paymentStatus = paymentStatus;
     if (search)        filter.name          = { $regex: search, $options: 'i' };
@@ -35,10 +37,13 @@ exports.getAll = async (req, res) => {
 };
 
 // ── GET /api/labor/stats ──────────────────────────────────────────────────────
+// SCOPED: all aggregations filtered by createdBy
 exports.getStats = async (req, res) => {
   try {
+    const userId = req.user._id;
     const [summary, byRole] = await Promise.all([
       Labor.aggregate([
+        { $match: { createdBy: userId } },
         {
           $group: {
             _id: null,
@@ -51,6 +56,7 @@ exports.getStats = async (req, res) => {
         },
       ]),
       Labor.aggregate([
+        { $match: { createdBy: userId } },
         { $group: { _id: '$role', count: { $sum: 1 }, totalCharge: { $sum: '$laborCharge' } } },
         { $sort: { count: -1 } },
       ]),
@@ -72,9 +78,11 @@ exports.getStats = async (req, res) => {
 };
 
 // ── GET /api/labor/:id ────────────────────────────────────────────────────────
+// SCOPED by createdBy
 exports.getById = async (req, res) => {
   try {
-    const item = await Labor.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await Labor.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
     res.json({ success: true, data: item });
   } catch (err) {
@@ -83,11 +91,13 @@ exports.getById = async (req, res) => {
 };
 
 // ── POST /api/labor ───────────────────────────────────────────────────────────
+// SCOPED: stamps createdBy
 exports.create = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
-    const item = await Labor.create(req.body);
+    const userId = req.user._id;
+    const item = await Labor.create({ ...req.body, createdBy: userId });
     res.status(201).json({ success: true, data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -95,11 +105,17 @@ exports.create = async (req, res) => {
 };
 
 // ── PUT /api/labor/:id ────────────────────────────────────────────────────────
+// SCOPED by createdBy
 exports.update = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
-    const item = await Labor.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const userId = req.user._id;
+    const item = await Labor.findOneAndUpdate(
+      { _id: req.params.id, createdBy: userId },
+      req.body,
+      { new: true, runValidators: true }
+    );
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
     res.json({ success: true, data: item });
   } catch (err) {
@@ -108,10 +124,11 @@ exports.update = async (req, res) => {
 };
 
 // ── PATCH /api/labor/:id/pay ──────────────────────────────────────────────────
-// Toggles paymentStatus: 'Due' → 'Paid', 'Paid' → 'Due'
+// Toggles paymentStatus: 'Due' → 'Paid', 'Paid' → 'Due' — SCOPED by createdBy
 exports.togglePay = async (req, res) => {
   try {
-    const item = await Labor.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await Labor.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
 
     item.paymentStatus = item.paymentStatus === 'Paid' ? 'Due' : 'Paid';
@@ -124,9 +141,11 @@ exports.togglePay = async (req, res) => {
 };
 
 // ── DELETE /api/labor/:id ─────────────────────────────────────────────────────
+// SCOPED by createdBy
 exports.remove = async (req, res) => {
   try {
-    const item = await Labor.findByIdAndDelete(req.params.id);
+    const userId = req.user._id;
+    const item = await Labor.findOneAndDelete({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });
     res.json({ success: true, message: 'Deleted' });
   } catch (err) {

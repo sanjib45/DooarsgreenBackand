@@ -4,7 +4,7 @@ const { validationResult } = require('express-validator');
 
 /**
  * GET /api/factory
- * Supports combined AND filtering:
+ * Supports combined AND filtering — ALL QUERIES SCOPED BY createdBy
  *   search    – partial, case-insensitive match on buyerName OR buyer.phone
  *   name      – filter by buyerName only
  *   phone     – filter by linked buyer phone only
@@ -12,6 +12,7 @@ const { validationResult } = require('express-validator');
  */
 exports.getAll = async (req, res) => {
   try {
+    const userId = req.user._id;
     const {
       search, name, phone,
       startDate, endDate,
@@ -19,14 +20,15 @@ exports.getAll = async (req, res) => {
       page = 1, limit = 50,
     } = req.query;
 
-    const andConditions = [];
+    // Always scope by user
+    const andConditions = [{ createdBy: userId }];
 
     // ── Name / phone search ──────────────────────────────────────────────────
     if (search && search.trim()) {
       const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-      // Find buyer IDs whose phone matches the search term
-      const matchedBuyers = await Buyer.find({ phone: regex }).select('_id').lean();
+      // Find buyer IDs whose phone matches the search term (scoped)
+      const matchedBuyers = await Buyer.find({ phone: regex, createdBy: userId }).select('_id').lean();
       const buyerIds = matchedBuyers.map(b => b._id);
 
       const orClause = [{ buyerName: regex }];
@@ -42,10 +44,10 @@ exports.getAll = async (req, res) => {
       });
     }
 
-    // Explicit phone filter — look up buyers with this phone first
+    // Explicit phone filter — look up buyers with this phone first (scoped)
     if (phone && phone.trim()) {
       const phoneRegex = new RegExp(phone.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      const matchedByPhone = await Buyer.find({ phone: phoneRegex }).select('_id').lean();
+      const matchedByPhone = await Buyer.find({ phone: phoneRegex, createdBy: userId }).select('_id').lean();
       const ids = matchedByPhone.map(b => b._id);
       if (ids.length > 0) {
         andConditions.push({ buyer: { $in: ids } });
@@ -70,7 +72,7 @@ exports.getAll = async (req, res) => {
       andConditions.push({ date: dateFilter });
     }
 
-    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
+    const filter = { $and: andConditions };
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [items, total] = await Promise.all([
@@ -89,10 +91,12 @@ exports.getAll = async (req, res) => {
   }
 };
 
-// GET /api/factory/stats
+// GET /api/factory/stats — SCOPED by createdBy
 exports.getStats = async (req, res, next) => {
   try {
+    const userId = req.user._id;
     const result = await Factory.aggregate([
+      { $match: { createdBy: userId } },
       {
         $group: {
           _id: null,
@@ -111,8 +115,9 @@ exports.getStats = async (req, res, next) => {
     ]);
     const base = result[0] || { totalRecords: 0, totalFactoryAmount: 0, totalAdvance: 0 };
 
-    // Payments are embedded — still need to load for totals, but limit fields
+    // Payments are embedded — still need to load for totals, but limit fields (scoped)
     const paymentAgg = await Factory.aggregate([
+      { $match: { createdBy: userId } },
       { $unwind: { path: '$payments', preserveNullAndEmptyArrays: true } },
       { $group: { _id: null, totalPaid: { $sum: '$payments.amount' } } },
     ]);
@@ -133,51 +138,60 @@ exports.getStats = async (req, res, next) => {
 };
 
 
-// GET /api/factory/:id
+// GET /api/factory/:id — SCOPED by createdBy
 exports.getById = async (req, res) => {
   try {
-    const item = await Factory.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await Factory.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
     res.json({ success: true, data: item });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// POST /api/factory
+// POST /api/factory — SCOPED: stamps createdBy
 exports.create = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
-    const item = await Factory.create(req.body);
+    const userId = req.user._id;
+    const item = await Factory.create({ ...req.body, createdBy: userId });
     res.status(201).json({ success: true, data: item });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// PUT /api/factory/:id
+// PUT /api/factory/:id — SCOPED by createdBy
 exports.update = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
-    const item = await Factory.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const userId = req.user._id;
+    const item = await Factory.findOneAndUpdate(
+      { _id: req.params.id, createdBy: userId },
+      req.body,
+      { new: true, runValidators: true }
+    );
     if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
     res.json({ success: true, data: item });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// DELETE /api/factory/:id
+// DELETE /api/factory/:id — SCOPED by createdBy
 exports.remove = async (req, res) => {
   try {
-    const item = await Factory.findByIdAndDelete(req.params.id);
+    const userId = req.user._id;
+    const item = await Factory.findOneAndDelete({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
     res.json({ success: true, message: 'Sale record deleted' });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// POST /api/factory/:id/payments — add a payment entry to a sale record
+// POST /api/factory/:id/payments — add a payment entry — SCOPED by createdBy
 exports.addPayment = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
-    const item = await Factory.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await Factory.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
 
     item.payments.push({
@@ -190,10 +204,11 @@ exports.addPayment = async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 
-// DELETE /api/factory/:id/payments/:paymentId — remove a specific payment
+// DELETE /api/factory/:id/payments/:paymentId — remove a specific payment — SCOPED
 exports.removePayment = async (req, res) => {
   try {
-    const item = await Factory.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await Factory.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
 
     const paymentIndex = item.payments.findIndex(p => p._id.toString() === req.params.paymentId);

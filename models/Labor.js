@@ -11,6 +11,12 @@ const mongoose = require('mongoose');
  * Toggling paymentStatus is done via PATCH /api/labor/:id/pay
  */
 const laborSchema = new mongoose.Schema({
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Owner user reference is required'],
+    index: true,
+  },
   name:          { type: String, required: [true, 'Name is required'], trim: true },
   role:          { type: String, required: [true, 'Role is required'], enum: ['Plucker', 'Factory Worker', 'Supervisor', 'Maintenance', 'Other'] },
   laborCharge:   { type: Number, required: [true, 'Labor charge is required'], min: [0, 'Labor charge cannot be negative'], default: 0 },

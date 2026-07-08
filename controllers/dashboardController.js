@@ -5,7 +5,10 @@ const Factory             = require('../models/Factory');
 
 /**
  * GET /api/dashboard
- * Returns all data needed for the dashboard in a single request:
+ * Returns all data needed for the dashboard in a single request.
+ * ─── FULLY SCOPED BY createdBy (req.user._id) ───
+ * Every aggregation, find, and computation is filtered by the logged-in user.
+ *
  *  - kpi           : top-level KPI numbers
  *  - merchantStats : merchant procurement summary
  *  - factoryStats  : factory sales summary
@@ -16,6 +19,8 @@ const Factory             = require('../models/Factory');
  */
 exports.getDashboard = async (req, res) => {
   try {
+    const userId = req.user._id;
+
     const [
       merchantSummary,
       factorySummaryRaw,
@@ -26,8 +31,9 @@ exports.getDashboard = async (req, res) => {
       allMerchants, // needed to map names accurately
     ] = await Promise.all([
 
-      // ── Merchant aggregate ──────────────────────────────────────────────
+      // ── Merchant aggregate (SCOPED) ────────────────────────────────────────
       MerchantTransaction.aggregate([
+        { $match: { createdBy: userId } },
         {
           $group: {
             _id: null,
@@ -42,8 +48,9 @@ exports.getDashboard = async (req, res) => {
         },
       ]),
 
-      // ── Factory aggregate ──────────────────────────────────────────────
+      // ── Factory aggregate (SCOPED) ─────────────────────────────────────────
       Factory.aggregate([
+        { $match: { createdBy: userId } },
         {
           $group: {
             _id: null,
@@ -70,29 +77,30 @@ exports.getDashboard = async (req, res) => {
         },
       ]),
 
-      // ── Factory payments total ──────────────────────────────────────────
+      // ── Factory payments total (SCOPED) ────────────────────────────────────
       Factory.aggregate([
+        { $match: { createdBy: userId } },
         { $unwind: { path: '$payments', preserveNullAndEmptyArrays: true } },
         { $group: { _id: null, totalPaid: { $sum: '$payments.amount' } } },
       ]),
 
-      // ── Recent 8 merchant transactions ─────────────────────────────────
-      MerchantTransaction.find()
+      // ── Recent 8 merchant transactions (SCOPED) ───────────────────────────
+      MerchantTransaction.find({ createdBy: userId })
         .sort('-transactionDate')
         .limit(8)
         .select('transactionId merchantName teaType netQty finalPayable balance transactionDate'),
 
-      // ── Recent 8 factory sales ─────────────────────────────────────────
-      Factory.find()
+      // ── Recent 8 factory sales (SCOPED) ───────────────────────────────────
+      Factory.find({ createdBy: userId })
         .sort('-date')
         .limit(8)
         .select('buyerName date totalQuantity lessPercentage rate advance payments remarks'),
 
-      // ── All Standalone Advances ────────────────────────────────────────
-      MerchantAdvance.find().lean(),
+      // ── All Standalone Advances (SCOPED) ──────────────────────────────────
+      MerchantAdvance.find({ createdBy: userId }).lean(),
 
-      // ── All Merchants ──────────────────────────────────────────────────
-      Merchant.find().select('name _id').lean(),
+      // ── All Merchants (SCOPED) ────────────────────────────────────────────
+      Merchant.find({ createdBy: userId }).select('name _id').lean(),
     ]);
 
     // Build a map of merchantId -> name
@@ -117,8 +125,8 @@ exports.getDashboard = async (req, res) => {
       }
     });
 
-    // We must manually compute due merchants since we have to subtract the standalone advances
-    const allMerchantTxns = await MerchantTransaction.find().select('merchantName balance transactionDate').lean();
+    // We must manually compute due merchants since we have to subtract the standalone advances (SCOPED)
+    const allMerchantTxns = await MerchantTransaction.find({ createdBy: userId }).select('merchantName balance transactionDate').lean();
     const merchantDueMap = {};
     const merchantDateMap = {};
 
@@ -177,8 +185,8 @@ exports.getDashboard = async (req, res) => {
       return { ...obj, netQty, totalAmount, totalPaid: paid, due };
     });
 
-    // ── Top due buyers — single correct pass over ALL factory records ───────
-    const allFactory = await Factory.find()
+    // ── Top due buyers — single correct pass over ALL factory records (SCOPED) ──
+    const allFactory = await Factory.find({ createdBy: userId })
       .select('buyerName totalQuantity lessPercentage rate advance payments')
       .lean();
 

@@ -6,6 +6,12 @@ const mongoose = require('mongoose');
  */
 const merchantPaymentSchema = new mongoose.Schema(
   {
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Owner user reference is required'],
+      index: true,
+    },
     transaction: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'MerchantTransaction',

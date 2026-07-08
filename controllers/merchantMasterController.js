@@ -8,17 +8,20 @@ const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // ── GET /api/merchants/search?q=... ──────────────────────────────────────────
 // Fast search for the dropdown autocomplete — returns top 15 matches
+// SCOPED: only returns merchants created by the logged-in user
 exports.search = async (req, res, next) => {
   try {
+    const userId = req.user._id;
     const { q = '' } = req.query;
     if (!q.trim()) {
-      const recent = await Merchant.find({}).sort('-createdAt').limit(15).lean();
+      const recent = await Merchant.find({ createdBy: userId }).sort('-createdAt').limit(15).lean();
       return res.json({ success: true, data: recent });
     }
 
     // Case-insensitive regex search on name OR phone
     const regex = new RegExp(q.trim(), 'i');
     const results = await Merchant.find({
+      createdBy: userId,
       $or: [{ name: regex }, { phone: regex }],
     })
       .sort('name')
@@ -30,10 +33,12 @@ exports.search = async (req, res, next) => {
 };
 
 // ── GET /api/merchants ───────────────────────────────────────────────────────
+// SCOPED: only returns merchants created by the logged-in user
 exports.getAll = async (req, res, next) => {
   try {
+    const userId = req.user._id;
     const { search, sort = 'name', page = 1, limit = 50 } = req.query;
-    const filter = {};
+    const filter = { createdBy: userId };
     if (search) {
       const regex = new RegExp(search.trim(), 'i');
       filter.$or = [{ name: regex }, { phone: regex }];
@@ -54,20 +59,22 @@ exports.getAll = async (req, res, next) => {
 };
 
 // ── GET /api/merchants/:id ───────────────────────────────────────────────────
+// SCOPED: only returns if merchant belongs to the logged-in user
 exports.getById = async (req, res, next) => {
   try {
+    const userId = req.user._id;
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid merchant ID format' });
     }
 
-    const merchant = await Merchant.findById(req.params.id).lean();
+    const merchant = await Merchant.findOne({ _id: req.params.id, createdBy: userId }).lean();
     if (!merchant) {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
 
-    // Also fetch aggregate stats for this merchant
+    // Also fetch aggregate stats for this merchant (scoped to user)
     const txnStats = await MerchantTransaction.aggregate([
-      { $match: { merchant: merchant._id } },
+      { $match: { merchant: merchant._id, createdBy: userId } },
       {
         $group: {
           _id: null,
@@ -94,8 +101,9 @@ exports.getById = async (req, res, next) => {
 };
 
 // ── POST /api/merchants — findOrCreate ───────────────────────────────────────
-// If phone exists → return existing merchant.
-// If not → create new merchant.
+// If phone exists for THIS user → return existing merchant.
+// If not → create new merchant owned by THIS user.
+// SCOPED: phone uniqueness is per-user, not global
 exports.findOrCreate = async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -103,10 +111,11 @@ exports.findOrCreate = async (req, res, next) => {
   }
 
   try {
+    const userId = req.user._id;
     const { name, phone, address, notes } = req.body;
 
-    // Check if merchant with this phone already exists
-    const existing = await Merchant.findOne({ phone: phone.trim() });
+    // Check if merchant with this phone already exists FOR THIS USER
+    const existing = await Merchant.findOne({ phone: phone.trim(), createdBy: userId });
     if (existing) {
       // Optionally update name/address if provided differently
       let updated = false;
@@ -132,8 +141,9 @@ exports.findOrCreate = async (req, res, next) => {
       });
     }
 
-    // Create new merchant
+    // Create new merchant owned by this user
     const merchant = await Merchant.create({
+      createdBy: userId,
       name: name.trim(),
       phone: phone.trim(),
       address: address?.trim() || '',
@@ -150,6 +160,7 @@ exports.findOrCreate = async (req, res, next) => {
 };
 
 // ── PUT /api/merchants/:id ───────────────────────────────────────────────────
+// SCOPED: only updates if merchant belongs to the logged-in user
 exports.update = async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -157,12 +168,13 @@ exports.update = async (req, res, next) => {
   }
 
   try {
+    const userId = req.user._id;
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid merchant ID format' });
     }
 
-    const merchant = await Merchant.findByIdAndUpdate(
-      req.params.id,
+    const merchant = await Merchant.findOneAndUpdate(
+      { _id: req.params.id, createdBy: userId },
       req.body,
       { new: true, runValidators: true }
     );
@@ -170,9 +182,9 @@ exports.update = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
 
-    // Also update the denormalized merchantName in all linked transactions
+    // Also update the denormalized merchantName in all linked transactions (scoped)
     await MerchantTransaction.updateMany(
-      { merchant: merchant._id },
+      { merchant: merchant._id, createdBy: userId },
       { $set: { merchantName: merchant.name } }
     );
 
@@ -181,14 +193,16 @@ exports.update = async (req, res, next) => {
 };
 
 // ── DELETE /api/merchants/:id ────────────────────────────────────────────────
+// SCOPED: only deletes if merchant belongs to the logged-in user
 exports.remove = async (req, res, next) => {
   try {
+    const userId = req.user._id;
     if (!isValidId(req.params.id)) {
       return res.status(400).json({ success: false, message: 'Invalid merchant ID format' });
     }
 
-    // Check for linked transactions
-    const txnCount = await MerchantTransaction.countDocuments({ merchant: req.params.id });
+    // Check for linked transactions (scoped)
+    const txnCount = await MerchantTransaction.countDocuments({ merchant: req.params.id, createdBy: userId });
     if (txnCount > 0) {
       return res.status(409).json({
         success: false,
@@ -196,7 +210,7 @@ exports.remove = async (req, res, next) => {
       });
     }
 
-    const merchant = await Merchant.findByIdAndDelete(req.params.id);
+    const merchant = await Merchant.findOneAndDelete({ _id: req.params.id, createdBy: userId });
     if (!merchant) {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }

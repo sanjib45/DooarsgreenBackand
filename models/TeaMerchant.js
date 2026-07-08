@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const teaMerchantSchema = new mongoose.Schema({
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: [true, 'Owner user reference is required'],
+    index: true,
+  },
   batchId: { type: String, required: [true, 'Batch ID required'], unique: true, trim: true, uppercase: true },
   teaType: { type: String, required: [true, 'Tea type required'], enum: ['Green Tea','CTC','Other'] },
   quantity: { type: Number, required: [true, 'Quantity required'], min: 0 },

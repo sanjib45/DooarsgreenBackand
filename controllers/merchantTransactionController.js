@@ -10,7 +10,7 @@ function genTxnId() {
 
 /**
  * GET /api/merchant-transactions
- * Combined AND filter support:
+ * Combined AND filter support — ALL QUERIES SCOPED BY createdBy
  *   search    – partial case-insensitive match on merchantName OR merchantPhone
  *   phone     – explicit phone filter (looks up Merchant, then filters by merchantId)
  *   teaType   – exact match
@@ -18,6 +18,7 @@ function genTxnId() {
  */
 exports.getAll = async (req, res) => {
   try {
+    const userId = req.user._id;
     const {
       merchantName, teaType, search, phone,
       sort = '-transactionDate',
@@ -25,7 +26,8 @@ exports.getAll = async (req, res) => {
       startDate, endDate,
     } = req.query;
 
-    const andConditions = [];
+    // Always scope by user
+    const andConditions = [{ createdBy: userId }];
 
     // ── Tea type filter ──────────────────────────────────────────────────────
     if (teaType && teaType.trim()) {
@@ -48,8 +50,8 @@ exports.getAll = async (req, res) => {
         search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'
       );
 
-      // Find merchants whose phone matches
-      const matchedMerchants = await Merchant.find({ phone: searchRegex }).select('_id').lean();
+      // Find merchants whose phone matches (scoped to user)
+      const matchedMerchants = await Merchant.find({ phone: searchRegex, createdBy: userId }).select('_id').lean();
       const merchantIds = matchedMerchants.map(m => m._id);
 
       const orClauses = [
@@ -68,7 +70,7 @@ exports.getAll = async (req, res) => {
       const phoneRegex = new RegExp(
         phone.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'
       );
-      const matchedByPhone = await Merchant.find({ phone: phoneRegex }).select('_id').lean();
+      const matchedByPhone = await Merchant.find({ phone: phoneRegex, createdBy: userId }).select('_id').lean();
       const ids = matchedByPhone.map(m => m._id);
 
       if (ids.length > 0) {
@@ -100,7 +102,7 @@ exports.getAll = async (req, res) => {
       andConditions.push({ transactionDate: dateFilter });
     }
 
-    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
+    const filter = { $and: andConditions };
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [items, total] = await Promise.all([
@@ -120,10 +122,13 @@ exports.getAll = async (req, res) => {
 };
 
 // ── GET /api/merchant-transactions/stats ──────────────────────────────────────
+// SCOPED: all aggregations filtered by createdBy
 exports.getStats = async (req, res) => {
   try {
+    const userId = req.user._id;
     const [summary, byType, recent] = await Promise.all([
       MerchantTransaction.aggregate([
+        { $match: { createdBy: userId } },
         {
           $group: {
             _id: null,
@@ -138,10 +143,11 @@ exports.getStats = async (req, res) => {
         },
       ]),
       MerchantTransaction.aggregate([
+        { $match: { createdBy: userId } },
         { $group: { _id: '$teaType', count: { $sum: 1 }, totalQty: { $sum: '$netQty' }, totalAmount: { $sum: '$finalPayable' } } },
         { $sort: { totalAmount: -1 } },
       ]),
-      MerchantTransaction.find().sort('-transactionDate').limit(5).select('transactionId merchantName netQty finalPayable transactionDate'),
+      MerchantTransaction.find({ createdBy: userId }).sort('-transactionDate').limit(5).select('transactionId merchantName netQty finalPayable transactionDate'),
     ]);
 
     res.json({
@@ -161,9 +167,11 @@ exports.getStats = async (req, res) => {
 };
 
 // ── GET /api/merchant-transactions/:id ────────────────────────────────────────
+// SCOPED: only returns if transaction belongs to the logged-in user
 exports.getById = async (req, res) => {
   try {
-    const item = await MerchantTransaction.findById(req.params.id);
+    const userId = req.user._id;
+    const item = await MerchantTransaction.findOne({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Transaction not found' });
     res.json({ success: true, data: item });
   } catch (err) {
@@ -172,6 +180,7 @@ exports.getById = async (req, res) => {
 };
 
 // ── POST /api/merchant-transactions ───────────────────────────────────────────
+// SCOPED: stamps createdBy on creation
 exports.create = async (req, res) => {
   // Auto-generate transactionId if not provided
   if (!req.body.transactionId) {
@@ -184,9 +193,10 @@ exports.create = async (req, res) => {
   }
 
   try {
+    const userId = req.user._id;
     // Inject calculated fields before save (pre-save hook also does this, double-safe)
     const calc = MerchantTransaction.computeFields(req.body);
-    const item = await MerchantTransaction.create({ ...req.body, ...calc });
+    const item = await MerchantTransaction.create({ ...req.body, ...calc, createdBy: userId });
     res.status(201).json({ success: true, data: item });
   } catch (err) {
     if (err.code === 11000) {
@@ -197,6 +207,7 @@ exports.create = async (req, res) => {
 };
 
 // ── PUT /api/merchant-transactions/:id ────────────────────────────────────────────────────
+// SCOPED: only updates if transaction belongs to the logged-in user
 exports.update = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -204,8 +215,9 @@ exports.update = async (req, res) => {
   }
 
   try {
+    const userId = req.user._id;
     // Fetch existing doc so we can fill in any fields the request doesn't touch
-    const existing = await MerchantTransaction.findById(req.params.id).lean();
+    const existing = await MerchantTransaction.findOne({ _id: req.params.id, createdBy: userId }).lean();
     if (!existing) return res.status(404).json({ success: false, message: 'Transaction not found' });
 
     // Merge existing values + incoming changes, then recalculate all derived fields
@@ -213,18 +225,12 @@ exports.update = async (req, res) => {
     const calc   = MerchantTransaction.computeFields(merged);
 
     // ── Explicitly compute balance ─────────────────────────────────────────
-    // We must do this here (not rely solely on the model hook) because:
-    //  • The model’s pre('findOneAndUpdate') hook is a safety net but can miss
-    //    edge cases depending on Mongoose internals.
-    //  • balance = finalPayable − total of all MerchantPayment records.
-    //    If advancePayment or qty/rate changes, finalPayable changes, so
-    //    balance must be recomputed against the real payment history.
-    const payments  = await MerchantPayment.find({ transaction: req.params.id }).lean();
+    const payments  = await MerchantPayment.find({ transaction: req.params.id, createdBy: userId }).lean();
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const balance   = Math.round((calc.finalPayable - totalPaid) * 100) / 100;
 
-    const item = await MerchantTransaction.findByIdAndUpdate(
-      req.params.id,
+    const item = await MerchantTransaction.findOneAndUpdate(
+      { _id: req.params.id, createdBy: userId },
       { ...req.body, ...calc, balance },   // balance is always explicit here
       { new: true, runValidators: true }
     );
@@ -236,10 +242,16 @@ exports.update = async (req, res) => {
 };
 
 // ── DELETE /api/merchant-transactions/:id ─────────────────────────────────────
+// SCOPED: only deletes if transaction belongs to the logged-in user
 exports.remove = async (req, res) => {
   try {
-    const item = await MerchantTransaction.findByIdAndDelete(req.params.id);
+    const userId = req.user._id;
+    const item = await MerchantTransaction.findOneAndDelete({ _id: req.params.id, createdBy: userId });
     if (!item) return res.status(404).json({ success: false, message: 'Transaction not found' });
+
+    // Also clean up related payments
+    await MerchantPayment.deleteMany({ transaction: req.params.id, createdBy: userId });
+
     res.json({ success: true, message: 'Transaction deleted successfully' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

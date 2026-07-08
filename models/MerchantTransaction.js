@@ -14,6 +14,13 @@ const mongoose = require('mongoose');
  */
 const merchantTransactionSchema = new mongoose.Schema(
   {
+    // ── Owner ─────────────────────────────────────────
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Owner user reference is required'],
+      index: true,
+    },
     // ── Identity ──────────────────────────────────────────
     transactionId: {
       type: String,
@@ -195,11 +202,11 @@ merchantTransactionSchema.methods._recalculate = function () {
 merchantTransactionSchema.statics.computeFields = computeFields;
 
 // ── Compound indexes for fast queries (all filter combinations) ───────────────
-merchantTransactionSchema.index({ merchantName: 1, transactionDate: -1 });
-merchantTransactionSchema.index({ merchantPhone: 1, transactionDate: -1 });
-merchantTransactionSchema.index({ merchant: 1, transactionDate: -1 });
-merchantTransactionSchema.index({ transactionDate: -1 });
-merchantTransactionSchema.index({ teaType: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ createdBy: 1, merchantName: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ createdBy: 1, merchantPhone: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ createdBy: 1, merchant: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ createdBy: 1, transactionDate: -1 });
+merchantTransactionSchema.index({ createdBy: 1, teaType: 1, transactionDate: -1 });
 
 
 module.exports = mongoose.model('MerchantTransaction', merchantTransactionSchema);
