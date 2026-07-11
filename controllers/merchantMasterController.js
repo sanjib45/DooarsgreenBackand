@@ -117,27 +117,9 @@ exports.findOrCreate = async (req, res, next) => {
     // Check if merchant with this phone already exists FOR THIS USER
     const existing = await Merchant.findOne({ phone: phone.trim(), createdBy: userId });
     if (existing) {
-      // Optionally update name/address if provided differently
-      let updated = false;
-      if (name && name.trim() !== existing.name) {
-        existing.name = name.trim();
-        updated = true;
-      }
-      if (address !== undefined && address !== existing.address) {
-        existing.address = address;
-        updated = true;
-      }
-      if (notes !== undefined && notes !== existing.notes) {
-        existing.notes = notes;
-        updated = true;
-      }
-      if (updated) await existing.save();
-
-      return res.status(200).json({
-        success: true,
-        data: existing,
-        isNew: false,
-        message: 'Existing merchant found and returned',
+      return res.status(400).json({
+        success: false,
+        message: 'This phone number is already registered with another merchant. Please use a different phone number.',
       });
     }
 
@@ -156,7 +138,15 @@ exports.findOrCreate = async (req, res, next) => {
       isNew: true,
       message: 'New merchant created',
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'A merchant with this phone number already exists in your account.',
+      });
+    }
+    next(err);
+  }
 };
 
 // ── PUT /api/merchants/:id ───────────────────────────────────────────────────
@@ -189,7 +179,15 @@ exports.update = async (req, res, next) => {
     );
 
     res.json({ success: true, data: merchant });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Another merchant with this phone number already exists in your account.',
+      });
+    }
+    next(err);
+  }
 };
 
 // ── DELETE /api/merchants/:id ────────────────────────────────────────────────

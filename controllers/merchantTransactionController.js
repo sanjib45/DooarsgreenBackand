@@ -194,6 +194,23 @@ exports.create = async (req, res) => {
 
   try {
     const userId = req.user._id;
+
+    // ── Auto-link or auto-create Merchant Master ──
+    let mId = req.body.merchant || req.body.merchantId;
+    if (!mId && req.body.merchantPhone) {
+      const phoneClean = req.body.merchantPhone.trim();
+      let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
+      if (!merchant) {
+        merchant = await require('../models/Merchant').create({
+          createdBy: userId,
+          name: req.body.merchantName.trim(),
+          phone: phoneClean,
+        });
+      }
+      mId = merchant._id;
+    }
+    if (mId) req.body.merchant = mId;
+
     // Inject calculated fields before save (pre-save hook also does this, double-safe)
     const calc = MerchantTransaction.computeFields(req.body);
     const item = await MerchantTransaction.create({ ...req.body, ...calc, createdBy: userId });
@@ -222,6 +239,23 @@ exports.update = async (req, res) => {
 
     // Merge existing values + incoming changes, then recalculate all derived fields
     const merged = { ...existing, ...req.body };
+
+    // ── Auto-link or auto-create Merchant Master if missing ──
+    let mId = merged.merchant || merged.merchantId;
+    if (!mId && merged.merchantPhone) {
+      const phoneClean = merged.merchantPhone.trim();
+      let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
+      if (!merchant) {
+        merchant = await require('../models/Merchant').create({
+          createdBy: userId,
+          name: merged.merchantName.trim(),
+          phone: phoneClean,
+        });
+      }
+      merged.merchant = merchant._id;
+      req.body.merchant = merchant._id; // Ensure it gets updated in DB
+    }
+
     const calc   = MerchantTransaction.computeFields(merged);
 
     // ── Explicitly compute balance ─────────────────────────────────────────
@@ -256,4 +290,167 @@ exports.remove = async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
+};
+// ── POST /api/merchant-transactions/import ────────────────────────────────────
+// Handles CSV file upload either for Preview (returns parsed data) or Direct Import
+exports.importCsv = async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+
+  const csv = require('csv-parser');
+  const { Readable } = require('stream');
+  
+  const results = [];
+  const errors = [];
+  const validRows = [];
+  const isPreview = req.query.preview === 'true';
+
+  const stream = Readable.from(req.file.buffer);
+
+  stream
+    .pipe(csv({
+      mapHeaders: ({ header }) => header.trim().replace(/^[\uFEFF\u200B]+/, ''),
+      mapValues: ({ value }) => typeof value === 'string' ? value.trim() : value
+    }))
+    .on('data', (data) => results.push(data))
+    .on('end', async () => {
+      let rowIndex = 1; // accounting for header
+
+      for (const row of results) {
+        rowIndex++;
+        try {
+          if (!row.merchantName) throw new Error('merchantName is required');
+          if (!row.teaType) throw new Error('teaType is required');
+          if (!row.grossQty) throw new Error('grossQty is required');
+          if (!row.ratePerKg) throw new Error('ratePerKg is required');
+
+          const payload = {
+            merchantName: row.merchantName,
+            merchantPhone: row.merchantPhone || undefined,
+            teaType: row.teaType || 'Green Tea',
+            transactionDate: row.transactionDate ? new Date(row.transactionDate) : new Date(),
+            grossQty: Number(row.grossQty),
+            lessPercent: Number(row.lessPercent) || 0,
+            fineLeaf: Number(row.fineLeaf) || 0,
+            ratePerKg: Number(row.ratePerKg),
+            labourHeadCount: Number(row.labourHeadCount) || 0,
+            labourCharge: Number(row.labourCharge) || 0,
+            advancePayment: Number(row.advancePayment) || 0,
+            notes: row.notes || ''
+          };
+
+          if (isNaN(payload.grossQty) || payload.grossQty <= 0) throw new Error('Invalid grossQty');
+          if (isNaN(payload.ratePerKg) || payload.ratePerKg <= 0) throw new Error('Invalid ratePerKg');
+
+          validRows.push(payload);
+        } catch (err) {
+          errors.push({ row: rowIndex, error: err.message, data: row });
+        }
+      }
+
+      // If just preview mode, return immediately
+      if (isPreview) {
+        return res.status(200).json({
+          success: true,
+          message: 'CSV parsed for preview',
+          preview: validRows,
+          errors
+        });
+      }
+
+      // Otherwise, we do direct insertion (Fallback if they bypass preview)
+      let insertedCount = 0;
+      const userId = req.user._id;
+      for (const payload of validRows) {
+        try {
+          // Auto-link/create Merchant Master
+          let mId = undefined;
+          if (payload.merchantPhone) {
+            const phoneClean = payload.merchantPhone;
+            let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
+            if (!merchant) {
+              merchant = await require('../models/Merchant').create({
+                createdBy: userId,
+                name: payload.merchantName,
+                phone: phoneClean,
+              });
+            }
+            mId = merchant._id;
+          }
+          if (mId) payload.merchant = mId;
+          
+          payload.transactionId = require('../utils/genTxnId')();
+          const calc = MerchantTransaction.computeFields(payload);
+          await MerchantTransaction.create({ ...payload, ...calc, createdBy: userId });
+          insertedCount++;
+        } catch(err) {
+          errors.push({ error: err.message, type: 'DB_INSERT' });
+        }
+      }
+
+      if (errors.length > 0) {
+        return res.status(207).json({
+          success: insertedCount > 0,
+          message: insertedCount > 0 ? `Imported ${insertedCount} records with some errors.` : 'Invalid data in CSV',
+          insertedCount,
+          errors
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'CSV imported successfully',
+        insertedCount
+      });
+    });
+};
+
+// ── POST /api/merchant-transactions/import/confirm ────────────────────────────
+// Accepts the confirmed JSON array from the preview screen
+exports.importJsonConfirm = async (req, res) => {
+  if (!req.user || !req.user._id) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  const items = req.body.items;
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ success: false, message: 'Invalid payload: items array is required' });
+  }
+
+  const errors = [];
+  let insertedCount = 0;
+  const userId = req.user._id;
+
+  for (const row of items) {
+    try {
+      let mId = undefined;
+      if (row.merchantPhone) {
+        let merchant = await require('../models/Merchant').findOne({ phone: row.merchantPhone, createdBy: userId });
+        if (!merchant) {
+          merchant = await require('../models/Merchant').create({
+            createdBy: userId,
+            name: row.merchantName,
+            phone: row.merchantPhone,
+          });
+        }
+        mId = merchant._id;
+      }
+      
+      const payload = { ...row };
+      // Ensure date is correctly instantiated
+      payload.transactionDate = new Date(payload.transactionDate);
+      if (mId) payload.merchant = mId;
+      
+      payload.transactionId = require('../utils/genTxnId')();
+      const calc = MerchantTransaction.computeFields(payload);
+      
+      await MerchantTransaction.create({ ...payload, ...calc, createdBy: userId });
+      insertedCount++;
+    } catch(err) {
+      errors.push(err.message);
+    }
+  }
+
+  if (errors.length > 0) {
+    return res.status(207).json({ success: insertedCount > 0, insertedCount, errors });
+  }
+  res.status(200).json({ success: true, message: 'Records confirmed & imported successfully', insertedCount });
 };

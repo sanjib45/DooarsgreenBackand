@@ -7,8 +7,8 @@ const mongoose = require('mongoose');
  *   lessQty           = grossQty * (lessPercent / 100)
  *   netQty            = grossQty - lessQty
  *   grossAmount       = netQty * ratePerKg
- *   totalLaborCharges = laborCount * laborChargePerWorker
- *   netPayable        = grossAmount - totalLaborCharges
+ *   labourAmount = labourHeadCount * labourCharge
+ *   netPayable        = grossAmount - labourAmount
  *   finalPayable      = netPayable - advancePayment
  *   balance           = finalPayable  (positive = still owed, negative = overpaid)
  */
@@ -82,15 +82,15 @@ const merchantTransactionSchema = new mongoose.Schema(
       required: [true, 'Rate per kg is required'],
       min: [0, 'Rate cannot be negative'],
     },
-    laborCount: {
+    labourHeadCount: {
       type: Number,
       default: 0,
-      min: [0, 'Labor count cannot be negative'],
+      min: [0, 'Labour head count cannot be negative'],
     },
-    laborChargePerWorker: {
+    labourCharge: {
       type: Number,
       default: 0,
-      min: [0, 'Labor charge per worker cannot be negative'],
+      min: [0, 'Labour charge cannot be negative'],
     },
     advancePayment: {
       type: Number,
@@ -102,7 +102,8 @@ const merchantTransactionSchema = new mongoose.Schema(
     lessQty:           { type: Number, default: 0 },
     netQty:            { type: Number, default: 0 },
     grossAmount:       { type: Number, default: 0 },
-    totalLaborCharges: { type: Number, default: 0 },
+    labourAmount:      { type: Number, default: 0 },
+    totalLaborCharges: { type: Number, default: 0 }, // legacy fallback
     netPayable:        { type: Number, default: 0 },
     finalPayable:      { type: Number, default: 0 },
     balance:           { type: Number, default: 0 },
@@ -175,18 +176,18 @@ function computeFields(d) {
   const grossQty             = Number(d.grossQty)             || 0;
   const lessPercent          = Number(d.lessPercent)          || 0;
   const ratePerKg            = Number(d.ratePerKg)            || 0;
-  const laborCount           = Number(d.laborCount)           || 0;
-  const laborChargePerWorker = Number(d.laborChargePerWorker) || 0;
+  const labourHeadCount      = Number(d.labourHeadCount)      || 0;
+  const labourCharge         = Number(d.labourCharge)         || 0;
   const advancePayment       = Number(d.advancePayment)       || 0;
 
   const lessQty           = round2(grossQty * (lessPercent / 100));
   const netQty            = round2(grossQty - lessQty);
   const grossAmount       = round2(netQty * ratePerKg);
-  const totalLaborCharges = round2(laborCount * laborChargePerWorker);
-  const netPayable        = round2(grossAmount - totalLaborCharges);
+  const labourAmount      = round2(labourHeadCount * labourCharge);
+  const netPayable        = round2(grossAmount - labourAmount);
   const finalPayable      = round2(netPayable - advancePayment);
 
-  return { lessQty, netQty, grossAmount, totalLaborCharges, netPayable, finalPayable };
+  return { lessQty, netQty, grossAmount, labourAmount, netPayable, finalPayable };
 }
 
 function round2(n) {

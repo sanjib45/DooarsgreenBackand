@@ -50,14 +50,14 @@ exports.getStats = async (req, res) => {
             totalWorkers:  { $sum: 1 },
             dueWorkers:    { $sum: { $cond: [{ $eq: ['$paymentStatus', 'Due'] }, 1, 0] } },
             paidWorkers:   { $sum: { $cond: [{ $eq: ['$paymentStatus', 'Paid'] }, 1, 0] } },
-            totalDue:      { $sum: { $cond: [{ $eq: ['$paymentStatus', 'Due'] }, '$laborCharge', 0] } },
-            totalCharge:   { $sum: '$laborCharge' },
+            totalDue:      { $sum: { $cond: [{ $eq: ['$paymentStatus', 'Due'] }, { $ifNull: ['$totalPayable', { $multiply: [{ $ifNull: ['$headCount', 1] }, '$laborCharge'] }] }, 0] } },
+            totalCharge:   { $sum: { $ifNull: ['$totalPayable', { $multiply: [{ $ifNull: ['$headCount', 1] }, '$laborCharge'] }] } },
           },
         },
       ]),
       Labor.aggregate([
         { $match: { createdBy: userId } },
-        { $group: { _id: '$role', count: { $sum: 1 }, totalCharge: { $sum: '$laborCharge' } } },
+        { $group: { _id: '$role', count: { $sum: 1 }, totalCharge: { $sum: { $ifNull: ['$totalPayable', { $multiply: [{ $ifNull: ['$headCount', 1] }, '$laborCharge'] }] } } } },
         { $sort: { count: -1 } },
       ]),
     ]);
@@ -97,7 +97,14 @@ exports.create = async (req, res) => {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
     const userId = req.user._id;
-    const item = await Labor.create({ ...req.body, createdBy: userId });
+    const body = { ...req.body, createdBy: userId };
+    
+    // Explicitly compute totalPayable
+    const hc = Number(body.headCount) || 1;
+    const lc = Number(body.laborCharge) || 0;
+    body.totalPayable = hc * lc;
+
+    const item = await Labor.create(body);
     res.status(201).json({ success: true, data: item });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -111,9 +118,15 @@ exports.update = async (req, res) => {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
     const userId = req.user._id;
+    const body = { ...req.body };
+
+    const hc = Number(body.headCount) || 1;
+    const lc = Number(body.laborCharge) || 0;
+    body.totalPayable = hc * lc;
+
     const item = await Labor.findOneAndUpdate(
       { _id: req.params.id, createdBy: userId },
-      req.body,
+      body,
       { new: true, runValidators: true }
     );
     if (!item) return res.status(404).json({ success: false, message: 'Not found' });

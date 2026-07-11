@@ -6,7 +6,8 @@ const PAYMENT_STATUSES = ['Due', 'Paid'];
 exports.createRules = [
   body('name').trim().notEmpty().withMessage('Name is required'),
   body('role').notEmpty().isIn(ROLES).withMessage('Invalid role'),
-  body('laborCharge').isFloat({ min: 0 }).withMessage('Labor charge must be a positive number'),
+  body('headCount').optional().isInt({ min: 1 }).withMessage('Head count must be at least 1').toInt(),
+  body('laborCharge').isFloat({ min: 0 }).withMessage('Labor charge must be a non-negative number'),
   body('joinDate').optional().isISO8601().withMessage('Valid join date required'),
   body('paymentStatus').optional().isIn(PAYMENT_STATUSES).withMessage('Invalid payment status'),
   body('notes').optional().trim().isLength({ max: 500 }),
@@ -15,6 +16,7 @@ exports.createRules = [
 exports.updateRules = [
   body('name').optional().trim().notEmpty(),
   body('role').optional().isIn(ROLES),
+  body('headCount').optional().isInt({ min: 1 }).withMessage('Head count must be at least 1').toInt(),
   body('laborCharge').optional().isFloat({ min: 0 }),
   body('joinDate').optional().isISO8601(),
   body('paymentStatus').optional().isIn(PAYMENT_STATUSES),
