@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const ctrl    = require('../controllers/merchantMasterController');
 const advCtrl = require('../controllers/merchantAdvanceController');
+const payCtrl = require('../controllers/merchantMasterPaymentController');
 const { createRules, updateRules } = require('../validators/merchantMasterValidator');
 const { protect } = require('../middleware/auth');
 
@@ -15,6 +16,11 @@ router.get('/',       ctrl.getAll);          // GET /api/merchants
 router.get('/:merchantId/advances',              advCtrl.getForMerchant);  // GET
 router.post('/:merchantId/advances',             advCtrl.create);           // POST
 router.delete('/:merchantId/advances/:advanceId', advCtrl.remove);          // DELETE
+
+// ── Merchant-level payment routes ──
+router.get('/:merchantId/payments',              payCtrl.getForMerchant);  // GET
+router.post('/:merchantId/payments',             payCtrl.create);           // POST
+router.delete('/:merchantId/payments/:paymentId', payCtrl.remove);          // DELETE
 
 router.get('/:id',    ctrl.getById);         // GET /api/merchants/:id
 router.post('/',      createRules, ctrl.findOrCreate); // POST /api/merchants

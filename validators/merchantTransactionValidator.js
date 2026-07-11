@@ -9,8 +9,8 @@ exports.createRules = [
   body('grossQty').isFloat({ min: 0 }).withMessage('Gross quantity must be a positive number'),
   body('lessPercent').optional().isFloat({ min: 0, max: 100 }).withMessage('Less % must be between 0–100'),
   body('ratePerKg').isFloat({ min: 0 }).withMessage('Rate per kg must be a positive number'),
-  body('laborCount').optional().isInt({ min: 0 }).withMessage('Labor count must be a non-negative integer'),
-  body('laborChargePerWorker').optional().isFloat({ min: 0 }).withMessage('Labor charge per worker must be positive'),
+  body('labourHeadCount').optional().isInt({ min: 0 }).withMessage('Labour head count must be a non-negative integer'),
+  body('labourCharge').optional().isFloat({ min: 0 }).withMessage('Labour charge must be positive'),
   body('advancePayment').optional().isFloat({ min: 0 }).withMessage('Advance payment must be positive'),
   body('notes').optional().isLength({ max: 500 }),
 ];
@@ -22,8 +22,8 @@ exports.updateRules = [
   body('grossQty').optional().isFloat({ min: 0 }),
   body('lessPercent').optional().isFloat({ min: 0, max: 100 }),
   body('ratePerKg').optional().isFloat({ min: 0 }),
-  body('laborCount').optional().isInt({ min: 0 }),
-  body('laborChargePerWorker').optional().isFloat({ min: 0 }),
+  body('labourHeadCount').optional().isInt({ min: 0 }),
+  body('labourCharge').optional().isFloat({ min: 0 }),
   body('advancePayment').optional().isFloat({ min: 0 }),
   body('notes').optional().isLength({ max: 500 }),
 ];
