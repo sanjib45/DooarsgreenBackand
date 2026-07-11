@@ -377,7 +377,7 @@ function buildInvoiceHtml(txn, payments) {
     : payments.map((p, i) => `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
         <td class="left">${fmtDate(p.paymentDate)}</td>
-        <td colspan="7" style="text-align:right;padding-right:10px;font-style:italic;color:#555;">
+        <td colspan="10" style="text-align:right;padding-right:10px;font-style:italic;color:#555;">
           Payment (${p.paymentMode || 'Cash'})
         </td>
         <td class="left">${p.notes || '&mdash;'}</td>
@@ -395,6 +395,9 @@ function buildInvoiceHtml(txn, payments) {
       <td class="num">${txn.fineLeaf > 0 ? `${txn.fineLeaf}%` : '&mdash;'}</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">${RS}${fmt(txn.ratePerKg)}</td>
+      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
+      <td class="num">${txn.labourCharge > 0 ? `${RS}${fmt(txn.labourCharge)}` : '&mdash;'}</td>
+      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
       <td>${txn.description || txn.teaType || '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
@@ -411,6 +414,9 @@ function buildInvoiceHtml(txn, payments) {
       <td class="num">&mdash;</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">&mdash;</td>
+      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
+      <td class="num">&mdash;</td>
+      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
       <td class="num">&mdash;</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
@@ -459,18 +465,21 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="table-wrapper">
   <table>
     <colgroup>
-      <col style="width:8%">
       <col style="width:7%">
+      <col style="width:6%">
+      <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:4%">
       <col style="width:6%">
       <col style="width:6%">
       <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:6%">
+      <col style="width:9%">
+      <col style="width:14%">
       <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:10%">
-      <col style="width:16%">
-      <col style="width:9%">
-      <col style="width:9%">
-      <col style="width:9%">
+      <col style="width:6%">
+      <col style="width:8%">
     </colgroup>
     <thead>
       <tr>
@@ -481,6 +490,9 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
         <th class="num">FINE%</th>
         <th class="num">NET QTY</th>
         <th class="num">RATE (${RS})</th>
+        <th class="num">LAB<br>CNT</th>
+        <th class="num">LAB<br>RATE</th>
+        <th class="num">LAB<br>COST</th>
         <th class="num">AMOUNT (${RS})</th>
         <th>DESC</th>
         <th class="num">NET PAY</th>
@@ -585,7 +597,7 @@ exports.generateInvoice = async (req, res) => {
 };
 
 // ── Build multi-transaction HTML (merchant + date range) ──────────────────────
-function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, paymentsMap, standaloneAdvances) {
+function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, paymentsMap, standaloneAdvances, masterPayments = []) {
   const logoImg = LOGO_BASE64
     ? `<img src="${LOGO_BASE64}" alt="Dooars Green FPO Logo" class="logo-img" />`
     : `<div class="logo-placeholder">DOOARS<br>GREEN<br>FPO</div>`;
@@ -618,7 +630,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
     const paymentSubRows = pmts.map((p) => `
       <tr class="row-even" style="font-style:italic;color:#555;">
         <td class="left">${fmtDate(p.paymentDate)}</td>
-        <td colspan="7" style="text-align:right;padding-right:10px;">Payment (${p.paymentMode || 'Cash'})</td>
+        <td colspan="10" style="text-align:right;padding-right:10px;">Payment (${p.paymentMode || 'Cash'})</td>
         <td class="left">${p.notes || '&mdash;'}</td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
@@ -634,6 +646,9 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
         <td class="num">${t.fineLeaf > 0 ? `${t.fineLeaf}%` : '&mdash;'}</td>
         <td class="num"><strong>${fmt(t.netQty)}</strong></td>
         <td class="num">${RS}${fmt(t.ratePerKg)}</td>
+        <td class="num">${t.labourHeadCount > 0 ? t.labourHeadCount : '&mdash;'}</td>
+        <td class="num">${t.labourCharge > 0 ? `${RS}${fmt(t.labourCharge)}` : '&mdash;'}</td>
+        <td class="num" style="color:#c0392b;">${t.labourAmount > 0 ? `-${RS}${fmt(t.labourAmount)}` : '&mdash;'}</td>
         <td class="num">${RS}${fmt(t.grossAmount)}</td>
         <td>${t.description || t.teaType || '&mdash;'}</td>
         <td class="num">${RS}${fmt(t.netPayable)}</td>
@@ -647,7 +662,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
   const advanceRows = (standaloneAdvances || []).map((a) => `
     <tr class="row-even" style="font-style:italic;color:#8b4513;background:#fff8ec;">
       <td class="left">${fmtDate(a.advanceDate)}</td>
-      <td colspan="7" style="text-align:right;padding-right:10px;font-weight:bold;">
+      <td colspan="10" style="text-align:right;padding-right:10px;font-weight:bold;">
         ADVANCE GIVEN (${a.paymentMode || 'Cash'})${a.notes ? ' &middot; ' + a.notes : ''}
       </td>
       <td class="left">${a.advanceId || ''}</td>
@@ -656,12 +671,27 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
       <td class="num" style="color:#c0392b;font-weight:bold;">-${RS}${fmt(a.amount)}</td>
     </tr>`).join('');
 
+  // Master payment rows
+  const masterPaymentRows = (masterPayments || []).map((m) => `
+    <tr class="row-even" style="font-style:italic;color:#1a5c1a;background:#f0f7f0;">
+      <td class="left">${fmtDate(m.paymentDate)}</td>
+      <td colspan="10" style="text-align:right;padding-right:10px;font-weight:bold;">
+        PAYMENT TO MERCHANT (${m.paymentMode || 'Cash'})${m.notes ? ' &middot; ' + m.notes : ''}
+      </td>
+      <td class="left">${m.paymentId || ''}</td>
+      <td class="num">&mdash;</td>
+      <td class="num">&mdash;</td>
+      <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(m.amount)}</td>
+    </tr>`).join('');
+
   const totalPaymentsMade = Object.values(paymentsMap).reduce(
     (sum, pmts) => sum + pmts.reduce((s, p) => s + p.amount, 0), 0
   );
   const totalStandaloneAdv = (standaloneAdvances || []).reduce((s, a) => s + a.amount, 0);
+  const totalMasterPayments = (masterPayments || []).reduce((s, m) => s + m.amount, 0);
+  
   const netFinalAmount = Math.max(0,
-    Math.round((totals.finalPayable - totalPaymentsMade - totalStandaloneAdv) * 100) / 100
+    Math.round((totals.finalPayable - totalPaymentsMade - totalStandaloneAdv - totalMasterPayments) * 100) / 100
   );
   const totalBalance = totals.balance;
 
@@ -701,18 +731,21 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="table-wrapper">
   <table>
     <colgroup>
-      <col style="width:8%">
       <col style="width:7%">
+      <col style="width:6%">
+      <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:4%">
       <col style="width:6%">
       <col style="width:6%">
       <col style="width:5%">
+      <col style="width:5%">
+      <col style="width:6%">
+      <col style="width:9%">
+      <col style="width:14%">
       <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:10%">
-      <col style="width:16%">
-      <col style="width:9%">
-      <col style="width:9%">
-      <col style="width:9%">
+      <col style="width:6%">
+      <col style="width:8%">
     </colgroup>
     <thead>
       <tr>
@@ -723,6 +756,9 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
         <th class="num">FINE%</th>
         <th class="num">NET QTY</th>
         <th class="num">RATE (${RS})</th>
+        <th class="num">LAB<br>CNT</th>
+        <th class="num">LAB<br>RATE</th>
+        <th class="num">LAB<br>COST</th>
         <th class="num">AMOUNT (${RS})</th>
         <th>DESC</th>
         <th class="num">NET PAY</th>
@@ -733,11 +769,15 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
     <tbody>
       ${txnRows}
       ${advanceRows}
+      ${masterPaymentRows}
       <tr class="total-row">
         <td class="left"><strong>TOTAL</strong></td>
         <td class="num">${fmt(totals.grossQty)}</td>
         <td class="num">&mdash;</td>
         <td class="num">${fmt(totals.lessQty)}</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
+        <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
@@ -756,12 +796,16 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
   <span class="balance-value-positive">${RS}${fmt(totals.finalPayable)}</span>
 </div>
 ${totalPaymentsMade > 0 ? `<div class="balance-row" style="border-color:#2d6a2d;background:#f5fff5;">
-  <span class="balance-label" style="color:#2d6a2d;">PAYMENTS MADE:</span>
+  <span class="balance-label" style="color:#2d6a2d;">TRANSACTION PAYMENTS:</span>
   <span class="balance-value-negative">-${RS}${fmt(totalPaymentsMade)}</span>
 </div>` : ''}
 ${totalStandaloneAdv > 0 ? `<div class="balance-row" style="border-color:#e8a000;background:#fff8ec;">
   <span class="balance-label" style="color:#8b4513;">ADVANCE GIVEN:</span>
   <span class="balance-value-negative">-${RS}${fmt(totalStandaloneAdv)}</span>
+</div>` : ''}
+${totalMasterPayments > 0 ? `<div class="balance-row" style="border-color:#2d6a2d;background:#f0f7f0;">
+  <span class="balance-label" style="color:#1a5c1a;">PAYMENTS TO MERCHANT:</span>
+  <span class="balance-value-negative">-${RS}${fmt(totalMasterPayments)}</span>
 </div>` : ''}
 <div class="balance-row">
   <span class="balance-label">NET AMOUNT PAYABLE:</span>
@@ -869,15 +913,24 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
     });
 
     let standaloneAdvances = [];
+    let masterPayments = [];
     if (merchant) {
-      standaloneAdvances = await MerchantAdvance.find({
+      const p1 = MerchantAdvance.find({
         createdBy: userId,
         merchant:    merchant._id,
         advanceDate: { $gte: rangeStart, $lte: rangeEnd },
       }).sort('advanceDate').lean();
+      
+      const p2 = require('../models/MerchantMasterPayment').find({
+        createdBy: userId,
+        merchant:    merchant._id,
+        paymentDate: { $gte: rangeStart, $lte: rangeEnd },
+      }).sort('paymentDate').lean();
+      
+      [standaloneAdvances, masterPayments] = await Promise.all([p1, p2]);
     }
 
-    const html = buildMultiInvoiceHtml(merchantName, finalStart, finalEnd, transactions, paymentsMap, standaloneAdvances);
+    const html = buildMultiInvoiceHtml(merchantName, finalStart, finalEnd, transactions, paymentsMap, standaloneAdvances, masterPayments);
 
     if (format.toLowerCase() === 'html') {
       return res.setHeader('Content-Type', 'text/html; charset=utf-8').send(html);
