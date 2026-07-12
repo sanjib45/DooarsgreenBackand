@@ -125,20 +125,12 @@ function invoiceNumber(txn) {
 
 // ── SHARED CSS — injected into every invoice template ────────────────────────
 const SHARED_CSS = `
-  ${FONT_BASE64 ? `
-  @font-face {
-    font-family: 'NotoSansINR';
-    src: url(${FONT_BASE64}) format('truetype');
-    font-weight: normal;
-    font-style: normal;
-    font-display: block;
-  }
-  ` : ''}
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700;800;900&display=swap');
 
   /* ── Reset & Base ── */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: ${FONT_BASE64 ? "'NotoSansINR', " : ''}Arial, Helvetica, sans-serif;
+    font-family: 'Noto Sans', Arial, Helvetica, sans-serif;
     font-size: 10.5px;
     color: #222;
     background: #fff;
@@ -474,8 +466,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
-    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
+    <div class="company-main" style="line-height:1.2;">DOOARS GREEN FPO<br><span style="font-size:12px;">MCSL</span></div>
+    <div class="company-sub" style="line-height:1.4;">GST NO - 19AAIAD3091R1ZO<br>REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Payment Voucher</div>
@@ -738,8 +730,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
-    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
+    <div class="company-main" style="line-height:1.2;">DOOARS GREEN FPO<br><span style="font-size:12px;">MCSL</span></div>
+    <div class="company-sub" style="line-height:1.4;">GST NO - 19AAIAD3091R1ZO<br>REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Payment Voucher</div>
@@ -1100,8 +1092,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
-    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
+    <div class="company-main" style="line-height:1.2;">DOOARS GREEN FPO<br><span style="font-size:12px;">MCSL</span></div>
+    <div class="company-sub" style="line-height:1.4;">GST NO - 19AAIAD3091R1ZO<br>REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Factory Invoice</div>
@@ -1315,8 +1307,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
-    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
+    <div class="company-main" style="line-height:1.2;">DOOARS GREEN FPO<br><span style="font-size:12px;">MCSL</span></div>
+    <div class="company-sub" style="line-height:1.4;">GST NO - 19AAIAD3091R1ZO<br>REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Factory Statement</div>
