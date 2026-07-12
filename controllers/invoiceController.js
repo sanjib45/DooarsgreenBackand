@@ -527,9 +527,6 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       ${totalRow}
     </tbody>
   </table>
-  <div style="font-size:8.5px;color:#777;margin-top:3px;">
-    QTY / L.KG / NET KG in KG &nbsp;&middot;&nbsp; RATE / AMOUNT / NETPAY / ADV / TOTAL in ${RS}
-  </div>
 </div>
 
 <!-- Balance -->
@@ -804,9 +801,6 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       </tr>
     </tbody>
   </table>
-  <div style="font-size:8.5px;color:#777;margin-top:3px;">
-    QTY / L.KG / NET KG in KG &nbsp;&middot;&nbsp; RATE / AMOUNT / NETPAY / ADV / TOTAL in ${RS}
-  </div>
 </div>
 
 <div class="balance-row" style="border-color:#2d6a2d;background:#f0f7f0;">
