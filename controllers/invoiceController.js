@@ -29,6 +29,22 @@ try {
   // Logo file not found — invoice will render without it
 }
 
+// ── Font: embed Noto Sans as base64 so the ₹ glyph ALWAYS renders in PDFs ─────
+// Serverless/minimal Linux containers (Vercel, Railway, @sparticuz/chromium)
+// usually have NO system fonts installed. "Arial/Helvetica" then silently falls
+// back to a generic sans-serif that often lacks the Indian Rupee glyph (U+20B9),
+// so ₹ shows as blank/tofu in the exported PDF even though it works locally.
+// Embedding the font directly in the HTML via a data: URI removes that
+// dependency on the host machine entirely — it will always render, everywhere.
+const FONT_PATH = path.join(__dirname, '..', 'assets', 'fonts', 'NotoSans-Regular.ttf');
+let FONT_BASE64 = '';
+try {
+  const fontBuf = fs.readFileSync(FONT_PATH);
+  FONT_BASE64 = `data:font/ttf;base64,${fontBuf.toString('base64')}`;
+} catch (_) {
+  // Font file not found — invoice will fall back to system fonts (₹ may not render)
+}
+
 // ── RUPEE SYMBOL — safe HTML entity ──────────────────────────────────────────
 // &#x20B9; is the Unicode Indian Rupee sign — renders correctly in all PDF engines
 const RS = '&#x20B9;';
@@ -52,6 +68,16 @@ function fmtDate(d) {
     day:   '2-digit',
     month: '2-digit',
     year:  'numeric',
+  });
+}
+
+// Compact date for narrow table cells (dd/mm/yy) — prevents truncation
+function fmtDateShort(d) {
+  if (!d) return '&mdash;';
+  return new Date(d).toLocaleDateString('en-IN', {
+    day:   '2-digit',
+    month: '2-digit',
+    year:  '2-digit',
   });
 }
 
@@ -99,10 +125,20 @@ function invoiceNumber(txn) {
 
 // ── SHARED CSS — injected into every invoice template ────────────────────────
 const SHARED_CSS = `
+  ${FONT_BASE64 ? `
+  @font-face {
+    font-family: 'NotoSansINR';
+    src: url(${FONT_BASE64}) format('truetype');
+    font-weight: normal;
+    font-style: normal;
+    font-display: block;
+  }
+  ` : ''}
+
   /* ── Reset & Base ── */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: Arial, Helvetica, sans-serif;
+    font-family: ${FONT_BASE64 ? "'NotoSansINR', " : ''}Arial, Helvetica, sans-serif;
     font-size: 10.5px;
     color: #222;
     background: #fff;
@@ -166,16 +202,17 @@ const SHARED_CSS = `
   }
   .header-center { flex: 1; text-align: center; padding: 0 12px; }
   .company-main  {
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 900;
     color: #2d6a2d;
-    letter-spacing: 1px;
+    letter-spacing: 0.5px;
     text-transform: uppercase;
   }
   .company-sub {
-    font-size: 11px;
+    font-size: 9.5px;
     color: #555;
-    margin-top: 2px;
+    margin-top: 3px;
+    font-weight: 600;
   }
   .header-right { text-align: right; min-width: 160px; }
   .voucher-title {
@@ -222,22 +259,23 @@ const SHARED_CSS = `
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10px;
+    font-size: 10.5px;
     table-layout: fixed;
   }
   colgroup col { /* override per-table */  }
 
   thead tr { background: #2d6a2d; color: #fff; }
   thead th {
-    padding: 6px 4px;
+    padding: 6px 2px;
     text-align: center;
     font-weight: 700;
     text-transform: uppercase;
-    font-size: 9.5px;
-    letter-spacing: 0.2px;
-    white-space: nowrap;       /* CRITICAL: keeps headers on single line */
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 8.3px;
+    letter-spacing: 0;
+    line-height: 1.2;
+    white-space: nowrap;       /* CRITICAL: header stays on ONE line — labels are kept short enough to fit */
+    overflow: hidden;          /* safety net only; short labels + sized columns mean this should never trigger */
+    text-overflow: clip;
   }
   /* Right-align numeric headers */
   thead th.num { text-align: right; padding-right: 6px; }
@@ -373,14 +411,13 @@ function buildInvoiceHtml(txn, payments) {
 
   // Payment rows
   const paymentRows = payments.length === 0
-    ? `<tr><td colspan="12" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
+    ? `<tr><td colspan="13" style="text-align:center;padding:12px;color:#888;">No payment records</td></tr>`
     : payments.map((p, i) => `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-        <td class="left">${fmtDate(p.paymentDate)}</td>
-        <td colspan="10" style="text-align:right;padding-right:10px;font-style:italic;color:#555;">
-          Payment (${p.paymentMode || 'Cash'})
+        <td class="left">${fmtDateShort(p.paymentDate)}</td>
+        <td colspan="9" style="text-align:right;padding-right:10px;font-style:italic;color:#555;">
+          Payment (${p.paymentMode || 'Cash'})${p.notes ? ' &middot; ' + p.notes : ''}
         </td>
-        <td class="left">${p.notes || '&mdash;'}</td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
         <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
@@ -388,18 +425,16 @@ function buildInvoiceHtml(txn, payments) {
 
   const txnRow = `
     <tr class="row-even">
-      <td class="left">${fmtDate(txn.transactionDate)}</td>
+      <td class="left">${fmtDateShort(txn.transactionDate)}</td>
       <td class="num">${fmt(txn.grossQty)}</td>
       <td class="num">${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '&mdash;'}</td>
       <td class="num">${fmt(txn.lessQty)}</td>
-      <td class="num">${txn.fineLeaf > 0 ? `${txn.fineLeaf}%` : '&mdash;'}</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">${RS}${fmt(txn.ratePerKg)}</td>
       <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
       <td class="num">${txn.labourCharge > 0 ? `${RS}${fmt(txn.labourCharge)}` : '&mdash;'}</td>
       <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
-      <td>${txn.description || txn.teaType || '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
       <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
       <td class="num"><strong>${RS}${fmt(txn.finalPayable)}</strong></td>
@@ -411,14 +446,12 @@ function buildInvoiceHtml(txn, payments) {
       <td class="num">${fmt(txn.grossQty)}</td>
       <td class="num">&mdash;</td>
       <td class="num">${fmt(txn.lessQty)}</td>
-      <td class="num">&mdash;</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">&mdash;</td>
       <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
       <td class="num">&mdash;</td>
       <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
-      <td class="num">&mdash;</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
       <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
       <td class="num total-amount">${RS}${fmt(txn.finalPayable)}</td>
@@ -429,7 +462,7 @@ function buildInvoiceHtml(txn, payments) {
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>DOOARS GREEN FPO - Payment Voucher</title>
+<title>DOOARS GREEN FPO  - Payment Voucher</title>
 <style>${SHARED_CSS}</style>
 </head>
 <body>
@@ -441,8 +474,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO</div>
-    <div class="company-sub">Small Tea Growers Collective</div>
+    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
+    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Payment Voucher</div>
@@ -465,39 +498,35 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="table-wrapper">
   <table>
     <colgroup>
+      <col style="width:8%">
       <col style="width:7%">
       <col style="width:6%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:4%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:6%">
-      <col style="width:9%">
-      <col style="width:14%">
       <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:7%">
       <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:11%">
       <col style="width:8%">
+      <col style="width:8%">
+      <col style="width:12%">
     </colgroup>
     <thead>
       <tr>
         <th class="left">DATE</th>
-        <th class="num">QTY (KG)</th>
+        <th class="num">QTY</th>
         <th class="num">LESS%</th>
-        <th class="num">LESS (KG)</th>
-        <th class="num">FINE%</th>
-        <th class="num">NET QTY</th>
-        <th class="num">RATE (${RS})</th>
-        <th class="num">LAB<br>CNT</th>
-        <th class="num">LAB<br>RATE</th>
-        <th class="num">LAB<br>COST</th>
-        <th class="num">AMOUNT (${RS})</th>
-        <th>DESC</th>
-        <th class="num">NET PAY</th>
-        <th class="num">ADVANCE</th>
-        <th class="num">TOTAL (${RS})</th>
+        <th class="num">L.KG</th>
+        <th class="num">NET KG</th>
+        <th class="num">RATE</th>
+        <th class="num">L.CNT</th>
+        <th class="num">L.RATE</th>
+        <th class="num">L.COST</th>
+        <th class="num">AMOUNT</th>
+        <th class="num">NETPAY</th>
+        <th class="num">ADV</th>
+        <th class="num">TOTAL</th>
       </tr>
     </thead>
     <tbody>
@@ -506,6 +535,9 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       ${totalRow}
     </tbody>
   </table>
+  <div style="font-size:8.5px;color:#777;margin-top:3px;">
+    QTY / L.KG / NET KG in KG &nbsp;&middot;&nbsp; RATE / AMOUNT / NETPAY / ADV / TOTAL in ${RS}
+  </div>
 </div>
 
 <!-- Balance -->
@@ -629,9 +661,10 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
     const pmts = paymentsMap[t._id.toString()] || [];
     const paymentSubRows = pmts.map((p) => `
       <tr class="row-even" style="font-style:italic;color:#555;">
-        <td class="left">${fmtDate(p.paymentDate)}</td>
-        <td colspan="10" style="text-align:right;padding-right:10px;">Payment (${p.paymentMode || 'Cash'})</td>
-        <td class="left">${p.notes || '&mdash;'}</td>
+        <td class="left">${fmtDateShort(p.paymentDate)}</td>
+        <td colspan="9" style="text-align:right;padding-right:10px;">
+          Payment (${p.paymentMode || 'Cash'})${p.notes ? ' &middot; ' + p.notes : ''}
+        </td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
         <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(p.amount)}</td>
@@ -639,18 +672,16 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
 
     return `
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
-        <td class="left">${fmtDate(t.transactionDate)}</td>
+        <td class="left">${fmtDateShort(t.transactionDate)}</td>
         <td class="num">${fmt(t.grossQty)}</td>
         <td class="num">${t.lessPercent > 0 ? `${t.lessPercent}%` : '&mdash;'}</td>
         <td class="num">${fmt(t.lessQty)}</td>
-        <td class="num">${t.fineLeaf > 0 ? `${t.fineLeaf}%` : '&mdash;'}</td>
         <td class="num"><strong>${fmt(t.netQty)}</strong></td>
         <td class="num">${RS}${fmt(t.ratePerKg)}</td>
         <td class="num">${t.labourHeadCount > 0 ? t.labourHeadCount : '&mdash;'}</td>
         <td class="num">${t.labourCharge > 0 ? `${RS}${fmt(t.labourCharge)}` : '&mdash;'}</td>
         <td class="num" style="color:#c0392b;">${t.labourAmount > 0 ? `-${RS}${fmt(t.labourAmount)}` : '&mdash;'}</td>
         <td class="num">${RS}${fmt(t.grossAmount)}</td>
-        <td>${t.description || t.teaType || '&mdash;'}</td>
         <td class="num">${RS}${fmt(t.netPayable)}</td>
         <td class="num">${t.advancePayment > 0 ? `${RS}${fmt(t.advancePayment)}` : '&mdash;'}</td>
         <td class="num"><strong>${RS}${fmt(t.finalPayable)}</strong></td>
@@ -661,11 +692,10 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
   // Standalone advance rows
   const advanceRows = (standaloneAdvances || []).map((a) => `
     <tr class="row-even" style="font-style:italic;color:#8b4513;background:#fff8ec;">
-      <td class="left">${fmtDate(a.advanceDate)}</td>
-      <td colspan="10" style="text-align:right;padding-right:10px;font-weight:bold;">
-        ADVANCE GIVEN (${a.paymentMode || 'Cash'})${a.notes ? ' &middot; ' + a.notes : ''}
+      <td class="left">${fmtDateShort(a.advanceDate)}</td>
+      <td colspan="9" style="text-align:right;padding-right:10px;font-weight:bold;">
+        ADVANCE GIVEN  (${a.paymentMode || 'Cash'})${a.notes ? ' &middot; ' + a.notes : ''}
       </td>
-      <td class="left">${a.advanceId || ''}</td>
       <td class="num">&mdash;</td>
       <td class="num">&mdash;</td>
       <td class="num" style="color:#c0392b;font-weight:bold;">-${RS}${fmt(a.amount)}</td>
@@ -674,11 +704,10 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
   // Master payment rows
   const masterPaymentRows = (masterPayments || []).map((m) => `
     <tr class="row-even" style="font-style:italic;color:#1a5c1a;background:#f0f7f0;">
-      <td class="left">${fmtDate(m.paymentDate)}</td>
-      <td colspan="10" style="text-align:right;padding-right:10px;font-weight:bold;">
+      <td class="left">${fmtDateShort(m.paymentDate)}</td>
+      <td colspan="9" style="text-align:right;padding-right:10px;font-weight:bold;">
         PAYMENT TO MERCHANT (${m.paymentMode || 'Cash'})${m.notes ? ' &middot; ' + m.notes : ''}
       </td>
-      <td class="left">${m.paymentId || ''}</td>
       <td class="num">&mdash;</td>
       <td class="num">&mdash;</td>
       <td class="num" style="color:#1a5c1a;font-weight:bold;">-${RS}${fmt(m.amount)}</td>
@@ -709,8 +738,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO</div>
-    <div class="company-sub">Small Tea Growers Collective</div>
+    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
+    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Payment Voucher</div>
@@ -731,39 +760,35 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="table-wrapper">
   <table>
     <colgroup>
+      <col style="width:8%">
       <col style="width:7%">
       <col style="width:6%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:4%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:5%">
-      <col style="width:5%">
-      <col style="width:6%">
-      <col style="width:9%">
-      <col style="width:14%">
       <col style="width:8%">
+      <col style="width:7%">
+      <col style="width:7%">
       <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:6%">
+      <col style="width:11%">
       <col style="width:8%">
+      <col style="width:8%">
+      <col style="width:12%">
     </colgroup>
     <thead>
       <tr>
         <th class="left">DATE</th>
-        <th class="num">QTY (KG)</th>
+        <th class="num">QTY</th>
         <th class="num">LESS%</th>
-        <th class="num">LESS (KG)</th>
-        <th class="num">FINE%</th>
-        <th class="num">NET QTY</th>
-        <th class="num">RATE (${RS})</th>
-        <th class="num">LAB<br>CNT</th>
-        <th class="num">LAB<br>RATE</th>
-        <th class="num">LAB<br>COST</th>
-        <th class="num">AMOUNT (${RS})</th>
-        <th>DESC</th>
-        <th class="num">NET PAY</th>
-        <th class="num">ADVANCE</th>
-        <th class="num">TOTAL (${RS})</th>
+        <th class="num">L.KG</th>
+        <th class="num">NET KG</th>
+        <th class="num">RATE</th>
+        <th class="num">L.CNT</th>
+        <th class="num">L.RATE</th>
+        <th class="num">L.COST</th>
+        <th class="num">AMOUNT</th>
+        <th class="num">NETPAY</th>
+        <th class="num">ADV</th>
+        <th class="num">TOTAL</th>
       </tr>
     </thead>
     <tbody>
@@ -780,15 +805,16 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
         <td class="num">&mdash;</td>
-        <td class="num">&mdash;</td>
         <td class="num">${RS}${fmt(totals.grossAmount)}</td>
-        <td class="num">&mdash;</td>
         <td class="num">${RS}${fmt(totals.netPayable)}</td>
         <td class="num">${totals.advancePayment > 0 ? `${RS}${fmt(totals.advancePayment)}` : '&mdash;'}</td>
         <td class="num total-amount">${RS}${fmt(totals.finalPayable)}</td>
       </tr>
     </tbody>
   </table>
+  <div style="font-size:8.5px;color:#777;margin-top:3px;">
+    QTY / L.KG / NET KG in KG &nbsp;&middot;&nbsp; RATE / AMOUNT / NETPAY / ADV / TOTAL in ${RS}
+  </div>
 </div>
 
 <div class="balance-row" style="border-color:#2d6a2d;background:#f0f7f0;">
@@ -974,18 +1000,6 @@ async function generatePdf(html) {
   // Always use sparticuz automatically on Linux/Serverless environments.
   const isServerless = process.platform !== 'win32';
 
-  // if (isServerless) {
-  //   try {
-  //     const sparticuz = (await import('@sparticuz/chromium')).default;
-  //     sparticuz.setGraphicsMode = false;
-  //     executablePath  = await sparticuz.executablePath();
-  //     launchArgs      = sparticuz.args;
-  //     headlessMode    = sparticuz.headless;
-  //     console.log('[generatePdf] Using @sparticuz/chromium at:', executablePath);
-  //   } catch (e) {
-  //     console.error('[generatePdf] Sparticuz failed, falling back:', e.message);
-  //   }
-  // }
   if (!executablePath && isServerless) {
     try {
       const sparticuz = (await import('@sparticuz/chromium')).default;
@@ -1086,8 +1100,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO</div>
-    <div class="company-sub">Factory Sale Invoice</div>
+    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
+    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Factory Invoice</div>
@@ -1301,8 +1315,8 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <div class="header">
   <div class="logo-col">${logoImg}</div>
   <div class="header-center">
-    <div class="company-main">DOOARS GREEN FPO</div>
-    <div class="company-sub">Factory Statement</div>
+    <div class="company-main">DOOARS GREEN FPO (MCSL)</div>
+    <div class="company-sub">GST NO - 19AAIAD3091R1ZO || REG NO- 7/Jal 2022-23 Dated 20.12.2022</div>
   </div>
   <div class="header-right">
     <div class="voucher-title">Factory Statement</div>
@@ -1432,4 +1446,3 @@ exports.generateFactoryInvoiceByBuyer = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to generate factory statement: ' + err.message });
   }
 };
-
