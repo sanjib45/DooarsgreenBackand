@@ -708,9 +708,7 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
   const totalStandaloneAdv = (standaloneAdvances || []).reduce((s, a) => s + a.amount, 0);
   const totalMasterPayments = (masterPayments || []).reduce((s, m) => s + m.amount, 0);
   
-  const netFinalAmount = Math.max(0,
-    Math.round((totals.finalPayable - totalPaymentsMade - totalStandaloneAdv - totalMasterPayments) * 100) / 100
-  );
+  const netFinalAmount = Math.round((totals.finalPayable - totalPaymentsMade - totalStandaloneAdv - totalMasterPayments) * 100) / 100;
   const totalBalance = totals.balance;
 
   return `<!DOCTYPE html>
