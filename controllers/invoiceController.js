@@ -436,16 +436,16 @@ function buildInvoiceHtml(txn, payments) {
     <tr class="total-row">
       <td class="left"><strong>TOTAL</strong></td>
       <td class="num">${fmt(txn.grossQty)}</td>
-      <td class="num">&mdash;</td>
+      <td class="num">-</td>
       <td class="num">${fmt(txn.lessQty)}</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
-      <td class="num">&mdash;</td>
-      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
-      <td class="num">&mdash;</td>
-      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
+      <td class="num">-</td>
+      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '-'}</td>
+      <td class="num">-</td>
+      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '-'}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
-      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
+      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '-'}</td>
       <td class="num total-amount">${RS}${fmt(txn.finalPayable)}</td>
     </tr>`;
 
@@ -633,14 +633,25 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
 
   // Summation across all transactions
   const totals = transactions.reduce((a, t) => ({
-    grossQty:       a.grossQty       + (t.grossQty       || 0),
-    lessQty:        a.lessQty        + (t.lessQty         || 0),
-    grossAmount:    a.grossAmount    + (t.grossAmount     || 0),
-    netPayable:     a.netPayable     + (t.netPayable      || 0),
-    advancePayment: a.advancePayment + (t.advancePayment  || 0),
-    finalPayable:   a.finalPayable   + (t.finalPayable    || 0),
-    balance:        a.balance        + (t.balance          || 0),
-  }), { grossQty: 0, lessQty: 0, grossAmount: 0, netPayable: 0, advancePayment: 0, finalPayable: 0, balance: 0 });
+    grossQty:        a.grossQty        + (t.grossQty        || 0),
+    lessQty:         a.lessQty         + (t.lessQty          || 0),
+    netQty:          a.netQty          + (t.netQty           || 0),
+    grossAmount:     a.grossAmount     + (t.grossAmount      || 0),
+    netPayable:      a.netPayable      + (t.netPayable       || 0),
+    advancePayment:  a.advancePayment  + (t.advancePayment   || 0),
+    finalPayable:    a.finalPayable    + (t.finalPayable     || 0),
+    balance:         a.balance         + (t.balance           || 0),
+    labourHeadCount: a.labourHeadCount + (t.labourHeadCount  || 0),
+    labourAmount:    a.labourAmount    + (t.labourAmount      || 0),
+    lessPercent:     a.lessPercent     + (t.lessPercent       || 0),
+    ratePerKg:       a.ratePerKg       + (t.ratePerKg         || 0),
+    labourCharge:    a.labourCharge    + (t.labourCharge      || 0),
+  }), { grossQty: 0, lessQty: 0, netQty: 0, grossAmount: 0, netPayable: 0, advancePayment: 0, finalPayable: 0, balance: 0, labourHeadCount: 0, labourAmount: 0, lessPercent: 0, ratePerKg: 0, labourCharge: 0 });
+
+  const txnCount = transactions.length || 1;
+  const avgLessPercent = parseFloat((totals.lessPercent / txnCount).toFixed(2));
+  const avgRate        = parseFloat((totals.ratePerKg   / txnCount).toFixed(2));
+  const avgLabourCharge = parseFloat((totals.labourCharge / txnCount).toFixed(2));
 
   const d = new Date(endDate || startDate);
   const invoiceNo = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
@@ -785,16 +796,16 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       <tr class="total-row">
         <td class="left"><strong>TOTAL</strong></td>
         <td class="num">${fmt(totals.grossQty)}</td>
-        <td class="num">&mdash;</td>
+        <td class="num">${avgLessPercent > 0 ? avgLessPercent + '%' : '-'}</td>
         <td class="num">${fmt(totals.lessQty)}</td>
-        <td class="num">&mdash;</td>
-        <td class="num">&mdash;</td>
-        <td class="num">&mdash;</td>
-        <td class="num">&mdash;</td>
-        <td class="num">&mdash;</td>
+        <td class="num"><strong>${fmt(totals.netQty)}</strong></td>
+        <td class="num">${RS}${fmt(avgRate)}</td>
+        <td class="num">${totals.labourHeadCount > 0 ? totals.labourHeadCount : '-'}</td>
+        <td class="num">${avgLabourCharge > 0 ? `${RS}${fmt(avgLabourCharge)}` : '-'}</td>
+        <td class="num" style="color:#c0392b;">${totals.labourAmount > 0 ? `-${RS}${fmt(totals.labourAmount)}` : '-'}</td>
         <td class="num">${RS}${fmt(totals.grossAmount)}</td>
         <td class="num">${RS}${fmt(totals.netPayable)}</td>
-        <td class="num">${totals.advancePayment > 0 ? `${RS}${fmt(totals.advancePayment)}` : '&mdash;'}</td>
+        <td class="num">${totals.advancePayment > 0 ? `${RS}${fmt(totals.advancePayment)}` : '-'}</td>
         <td class="num total-amount">${RS}${fmt(totals.finalPayable)}</td>
       </tr>
     </tbody>
