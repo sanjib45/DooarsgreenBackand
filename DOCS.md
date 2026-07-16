@@ -1,107 +1,129 @@
-# DOOARS GREEN FPO — System Documentation
+# DOOARS GREEN FPO — Production Backend Documentation
 
-> **Version:** 2.0 (Production)  
-> **Updated:** July 2026  
-> **Stack:** Node.js · Express · MongoDB Atlas · Puppeteer · React (Vite)
+> **Updated:** July 2026
+> **Repository:** `teanest-backend`
+> **Scope:** This repository contains the Express/MongoDB API. The React/Vite frontend mentioned below is deployed from a separate repository.
 
----
+## Contents
 
-## Table of Contents
+1. [System overview](#system-overview)
+2. [Quick start](#quick-start)
+3. [Configuration](#configuration)
+4. [Architecture and request lifecycle](#architecture-and-request-lifecycle)
+5. [Authentication and tenancy](#authentication-and-tenancy)
+6. [Domain model](#domain-model)
+7. [API reference](#api-reference)
+8. [CSV imports, invoices, and PDFs](#csv-imports-invoices-and-pdfs)
+9. [Deployment](#deployment)
+10. [Migrations and operations](#migrations-and-operations)
+11. [Production risks and technical debt](#production-risks-and-technical-debt)
 
-1. [Architecture Overview](#1-architecture-overview)
-2. [Environment Variables](#2-environment-variables)
-3. [API Routes Reference](#3-api-routes-reference)
-4. [Filter System](#4-filter-system)
-5. [PDF Generation Flow](#5-pdf-generation-flow)
-6. [Invoice Template Guide](#6-invoice-template-guide)
-7. [Security](#7-security)
-8. [MongoDB Index Strategy](#8-mongodb-index-strategy)
-9. [Frontend Components](#9-frontend-components)
-10. [Deployment Guide](#10-deployment-guide)
-11. [Known Issues & Fixes](#11-known-issues--fixes)
+## System overview
 
----
+DOOARS GREEN FPO manages tea-estate procurement, factory sales, labor, payments, buyer and supplier records, and PDF invoices.
 
-## 1. Architecture Overview
-
+```text
+React/Vite frontend (separate repository)
+             |
+             v
+Express API (this repository) ---> MongoDB Atlas
+             |
+             +-- Puppeteer + Chromium ---> PDF invoices
 ```
-Browser  ──▶  Vite (React)  ──▶  Express API  ──▶  MongoDB Atlas
-                                      │
-                                 Puppeteer (PDF)
-                                      │
-                               @sparticuz/chromium (Serverless)
-```
 
-**Backend port:** `8080` (configured via `PORT` env var)  
-**Frontend:** Deployed to Vercel  
-**Backend:** Deployable to Railway / Render / Docker / Vercel Serverless
+The backend uses Node.js, Express 4, Mongoose/MongoDB, JWT, bcrypt, `express-validator`, and Puppeteer Core. Docker uses Node 20 and a system Chromium installation.
 
----
+### Important terminology
 
-## 2. Environment Variables
+The similarly named resources below serve different business functions:
 
-### Backend
-
-| Variable | Required | Description |
+| API path | Model | Meaning |
 |---|---|---|
-| `PORT` | Yes | Server port (default `8080`) |
-| `NODE_ENV` | Yes | `production` or `development` |
-| `MONGO_URI` | Yes | MongoDB Atlas connection string |
-| `JWT_SECRET` | Yes | Access token secret |
-| `JWT_REFRESH_SECRET` | Yes | Refresh token secret |
-| `JWT_ACCESS_EXPIRES_IN` | Yes | e.g. `15m` |
-| `JWT_REFRESH_EXPIRES_IN` | Yes | e.g. `7d` |
-| `ALLOWED_ORIGINS` | Yes | Comma-separated frontend URLs |
-| `PUPPETEER_EXECUTABLE_PATH` | Optional | Path to Chrome/Chromium binary |
+| `/api/merchants` | `Merchant` | Leaf-supplier master data used for procurement |
+| `/api/merchant-transactions` | `MerchantTransaction` | Individual leaf procurement transactions |
+| `/api/merchant` | `TeaMerchant` | Tea batch/inventory records |
+| `/api/factory` | `Factory` | Tea sales to buyers |
 
-### Frontend
+## Quick start
 
-| Variable | Required | Description |
-|---|---|---|
-| `VITE_API_BASE_URL` | Yes | Backend API URL |
+### Prerequisites
 
----
+- Node.js 20 or newer
+- A MongoDB Atlas connection
+- Chromium/Chrome when generating PDFs locally
 
-## 3. API Routes Reference
+### Install and run
 
-### Merchant Transactions (`/api/merchant-transactions`)
+```bash
+npm install
+cp .env.example .env # Create manually; this repository does not currently include this file.
+node server.js
+```
 
-**GET Query Params — all combine with AND logic:**
+`npm start` runs `nodemon server.js` and is intended for development. The application listens on `PORT` or, when it is absent, port `5000`.
 
-| Param | Description |
+Verify the service:
+
+```bash
+curl http://localhost:5000/
+```
+
+The root health endpoint is public. API endpoints are mounted under `/api`.
+
+## Configuration
+
+Secrets must be configured in the hosting provider; never commit `.env`.
+
+| Variable | Required in production | Used for |
+|---|---:|---|
+| `MONGO_URI` | Yes | MongoDB connection |
+| `JWT_SECRET` | Yes | Access-token signing and verification |
+| `JWT_REFRESH_SECRET` | Yes | Refresh-token signing and verification |
+| `NODE_ENV` | Yes | Production cookie and error-handling behavior |
+| `ALLOWED_ORIGINS` | Yes | Comma-separated CORS allowlist |
+| `PORT` | No | HTTP port; code defaults to `5000` |
+| `PUPPETEER_EXECUTABLE_PATH` | Usually | System Chrome/Chromium path for containers |
+| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | Container only | Avoids downloading a browser during install |
+| `VERCEL` | Platform-provided | Prevents `app.listen()` for serverless execution |
+
+The frontend’s separate deployment needs `VITE_API_BASE_URL` pointing to the backend `/api` base URL.
+
+Access-token expiry is currently hard-coded to one hour and refresh-token expiry to seven days in `controllers/authController.js`; `JWT_ACCESS_EXPIRES_IN` and `JWT_REFRESH_EXPIRES_IN` are not read by the application.
+
+## Architecture and request lifecycle
+
+### Entry points
+
+| File | Responsibility |
 |---|---|
-| `search` | Partial match on merchantName **OR** merchantPhone |
-| `phone` | Explicit phone filter |
-| `merchantName` | Name only filter |
-| `teaType` | `Green Tea`, `CTC`, or `Other` |
-| `startDate` | ISO date range start |
-| `endDate` | ISO date range end (inclusive full day) |
+| `server.js` | Loads environment variables, connects MongoDB, starts the HTTP listener unless deployed on Vercel |
+| `app.js` | Builds Express middleware, mounts routes, defines the health check, 404 handling, and error handling |
+| `config/db.js` | Creates the Mongoose connection |
+| `routes/index.js` | Mounts all API route groups |
+| `middleware/auth.js` | Verifies bearer tokens and loads the current user |
+| `middleware/errorHandler.js` | Emits consistent error responses |
 
-**Invoice endpoints:**
-```
-GET /api/merchant-transactions/:id/invoice?format=pdf|html
-GET /api/merchant-transactions/invoice/by-merchant-date?merchantName=...&startDate=...&endDate=...
-```
+### Middleware behavior
 
-### Factory (`/api/factory`)
+Requests pass through the following major controls:
 
-**GET Query Params — all combine with AND logic:**
+1. Reverse-proxy trust, Helmet, CORS, JSON and URL-encoded body parsing (10 MB limit), cookie parsing, and Morgan logging.
+2. A global 10-second response timeout.
+3. A rate limit of 300 `/api` requests per two minutes.
+4. Route-specific authentication and input validation.
+5. The global 404 and error handlers.
 
-| Param | Description |
-|---|---|
-| `search` | Partial match on buyerName **OR** buyer phone |
-| `name` | buyerName only |
-| `phone` | Buyer phone only |
-| `startDate` | Date range start |
-| `endDate` | Date range end |
+The global timeout can be shorter than a slow Puppeteer rendering operation. Monitor invoice traffic and resource limits in production.
 
-**Invoice endpoints:**
-```
-GET /api/factory/:id/invoice?format=pdf|html
-GET /api/factory/invoice/by-buyer?buyerName=...
+### Response conventions
+
+Successful responses generally use:
+
+```json
+{ "success": true, "data": {} }
 ```
 
-### Error Response Format
+List responses may also include `pagination`. Validation and application errors generally use:
 
 ```json
 {
@@ -111,174 +133,220 @@ GET /api/factory/invoice/by-buyer?buyerName=...
 }
 ```
 
----
+## Authentication and tenancy
 
-## 4. Filter System
+### Token flow
 
-All active filters combine with **AND logic** using `$and`:
+1. `POST /api/auth/login` verifies the password.
+2. The API returns an access JWT for the `Authorization: Bearer <token>` header and sets an httpOnly refresh-token cookie.
+3. `POST /api/auth/refresh` rotates the refresh token and returns a new access token.
+4. `POST /api/auth/logout` clears the cookie and removes the stored token hash.
 
-```js
-// Example: search="Ramesh" AND teaType="Green Tea" AND date range
-{
-  $and: [
-    { $or: [{ merchantName: /Ramesh/i }, { merchantPhone: /Ramesh/i }, { merchant: { $in: [...] } }] },
-    { teaType: 'Green Tea' },
-    { transactionDate: { $gte: start, $lte: end } }
-  ]
-}
+Refresh tokens are hashed in MongoDB, rotated on refresh, and capped at five active sessions. A refresh-token mismatch clears a user’s sessions. Production cookies are secure and `sameSite: strict`.
+
+All non-auth API routes require a bearer token through `routes/index.js`. Business records are normally filtered by `createdBy`, so each authenticated user accesses their own tenant data. Clients must send credentials where the refresh cookie is needed and must use an origin allowed by `ALLOWED_ORIGINS`.
+
+`User` stores `Admin` and `Manager` roles, but the available `requireRole` middleware is not applied to the mounted routes. Roles therefore do not currently provide route-level authorization.
+
+## Domain model
+
+```text
+User
+ ├─ Merchant ──< MerchantTransaction ──< MerchantPayment
+ │       ├─< MerchantAdvance
+ │       └─< MerchantMasterPayment
+ ├─ Buyer ──< Factory (embedded payments[])
+ ├─ Labor
+ ├─ Payment
+ └─ TeaMerchant
 ```
 
-All user input is sanitized before regex use to prevent ReDoS:
-```js
-const safe = input.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-```
-
----
-
-## 5. PDF Generation Flow
-
-```
-generatePdf(html) called
-  1. Resolve Chromium path:
-     a. PUPPETEER_EXECUTABLE_PATH env var (Railway/Docker)
-     b. @sparticuz/chromium (Vercel Serverless)
-     c. Windows: C:\Program Files\Google\Chrome\...
-     d. Linux: /usr/bin/chromium-browser
-  2. puppeteer.launch({ headless: 'new', args: [...no-sandbox flags] })
-  3. page.setContent(html, { waitUntil: 'networkidle0' })
-  4. page.pdf({ format: 'A4', printBackground: true })
-  5. Return Buffer.from(pdfData)
-  6. browser.close() (in finally block — always runs)
-```
-
----
-
-## 6. Invoice Template Guide
-
-### Rupee Symbol
-Use `&#x20B9;` (stored as `const RS` in invoiceController.js) — NOT the UTF-8 `₹` literal.
-
-### Header Single-Line Fix
-```css
-thead th { white-space: nowrap; }
-```
-
-### Watermark Fix
-```css
-.watermark-bg {
-  position: fixed;   /* NOT absolute */
-  z-index: 0;        /* NOT -10 */
-  opacity: 0.07;
-}
-/* All content: z-index: 1 to appear above watermark */
-```
-
-### Column Alignment
-- Numbers: `text-align: right` (class `num`)
-- Text: `text-align: left` (class `left`)
-- Table uses `<colgroup>` for proportional width control
-
----
-
-## 7. Security
-
-| Measure | Implementation |
+| Model | Purpose |
 |---|---|
-| Helmet headers | `helmet()` in app.js |
-| Rate limiting | 300 req/2min via `express-rate-limit` |
-| CORS allowlist | Only `ALLOWED_ORIGINS` accepted |
-| Input validation | `express-validator` on all mutation routes |
-| Regex sanitization | All filter strings escaped before MongoDB regex |
-| JWT auth | httpOnly refresh cookie + short-lived access token |
-| No stack in prod | errorHandler hides stack when `NODE_ENV=production` |
+| `User` | Accounts, hashed passwords, refresh-token hashes, roles |
+| `Merchant` | Leaf supplier master; unique per `phone` and `createdBy` |
+| `MerchantTransaction` | Leaf procurement, calculated payable amounts, transaction-level payments |
+| `MerchantPayment` | Payment applied to one procurement transaction |
+| `MerchantAdvance` | Supplier advance at merchant-master level |
+| `MerchantMasterPayment` | Merchant-level payment |
+| `Buyer` | Factory buyer master; unique per `phone` and `createdBy` |
+| `Factory` | Sale to a buyer with embedded payment subdocuments |
+| `Labor` | Worker record and paid/due state |
+| `Payment` | General-purpose payment ledger |
+| `TeaMerchant` | Tea batch/inventory record; distinct from supplier `Merchant` |
 
----
+### Calculations
 
-## 8. MongoDB Index Strategy
+For `MerchantTransaction`:
 
-### MerchantTransaction
-```
-{ merchantName: 1, transactionDate: -1 }
-{ merchantPhone: 1, transactionDate: -1 }
-{ merchant: 1, transactionDate: -1 }
-{ transactionDate: -1 }
-{ teaType: 1, transactionDate: -1 }
-{ transactionId: 1 }   // unique
-```
-
-### Merchant
-```
-{ name: 'text' }   // text search
-{ phone: 1 }       // unique
+```text
+lessQty       = grossQty × lessPercent / 100
+netQty        = grossQty − lessQty
+grossAmount   = netQty × ratePerKg
+labourAmount  = labourHeadCount × labourCharge
+netPayable    = grossAmount − labourAmount
+finalPayable  = netPayable − advancePayment
+balance       = finalPayable − transaction payment total
 ```
 
-### Factory
+For `Factory`:
+
+```text
+lessQuantity = totalQuantity × lessPercentage / 100
+netQuantity  = totalQuantity − lessQuantity
+totalAmount  = netQuantity × rate
+due          = totalAmount − advance − sum(payments[].amount)
 ```
-{ buyer: 1, date: -1 }
-{ date: -1 }
-{ buyerName: 1 }
-```
 
----
+## API reference
 
-## 9. Frontend Components
+All paths below are prefixed with `/api`. Unless explicitly noted, authentication is required.
 
-| Component | Purpose |
-|---|---|
-| `MerchantTableFilters` | Name+phone search, date preset, tea type — with Clear All button |
-| `MerchantTransactionTable` | Paginated table with edit/delete/detail |
-| `MerchantTransactionForm` | Create/edit with live field calculations |
-| `MerchantProfileDrawer` | Merchant history + invoice generation |
-| `BuyerHistoryDrawer` | Buyer history + factory invoice |
-| `SearchableSelect` | Async autocomplete for Merchant/Buyer selection |
-| `ConfirmationModal` | Reusable delete confirm |
-| `CustomDateRangeModal` | Date range picker |
+### Public authentication routes
 
----
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/auth/register` | Register an account |
+| POST | `/auth/login` | Obtain access token and refresh cookie |
+| POST | `/auth/refresh` | Rotate refresh token and issue access token |
+| POST | `/auth/logout` | End the current refresh-token session |
+| POST | `/auth/reset-password` | Reset a password |
 
-## 10. Deployment Guide
+### User profile
 
-### Railway (recommended for backend)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/users/me` | Read current user profile |
+| PUT | `/users/me` | Update current user profile |
+| PUT | `/users/change-password` | Change current user password |
 
-```bash
-# Required env vars on Railway dashboard:
-PORT=8080
-NODE_ENV=production
-MONGO_URI=mongodb+srv://...
-JWT_SECRET=<strong-secret>
-JWT_REFRESH_SECRET=<strong-secret>
-ALLOWED_ORIGINS=https://your-frontend.vercel.app
-PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-```
+### Supplier masters and payments
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET, POST | `/merchants` | List or find/create suppliers |
+| GET | `/merchants/search?q=...` | Search suppliers |
+| GET, PUT, DELETE | `/merchants/:id` | Read, update, or remove a supplier |
+| GET, POST | `/merchants/:merchantId/advances` | List or create supplier advances |
+| DELETE | `/merchants/:merchantId/advances/:advanceId` | Remove an advance |
+| GET, POST | `/merchants/:merchantId/payments` | List or create supplier-level payments |
+| DELETE | `/merchants/:merchantId/payments/:paymentId` | Remove a supplier-level payment |
+
+### Procurement transactions
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET, POST | `/merchant-transactions` | List or create procurement transactions |
+| GET | `/merchant-transactions/stats` | Procurement statistics |
+| POST | `/merchant-transactions/import` | Parse uploaded CSV; supports preview |
+| POST | `/merchant-transactions/import-confirm` | Confirm imported JSON rows |
+| GET, PUT, DELETE | `/merchant-transactions/:id` | Read, update, or remove transaction |
+| GET | `/merchant-transactions/:id/invoice?format=pdf\|html` | Generate one transaction invoice |
+| GET | `/merchant-transactions/invoice/by-merchant-date` | Generate a multi-transaction merchant invoice |
+| GET, POST | `/merchant-transactions/:txnId/payments` | List or create transaction payments |
+| DELETE | `/merchant-transactions/:txnId/payments/:payId` | Remove a transaction payment |
+
+`merchant-transactions` supports combined filtering including `search`, `phone`, `merchantName`, `teaType`, `startDate`, and `endDate`. Conditions combine as AND; search values are escaped before use in MongoDB regular expressions.
+
+### Tea inventory, buyers, factory, labor, and ledger
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET, POST | `/merchant` | List or create `TeaMerchant` inventory records |
+| GET | `/merchant/stats` | Tea inventory statistics |
+| GET, PUT, DELETE | `/merchant/:id` | Manage a tea inventory record |
+| GET, POST | `/buyers` | List or find/create buyers |
+| GET | `/buyers/search` | Search buyers |
+| GET, PUT, DELETE | `/buyers/:id` | Manage a buyer |
+| GET, POST | `/factory` | List or create factory sales |
+| GET | `/factory/stats` | Factory-sale statistics |
+| GET, PUT, DELETE | `/factory/:id` | Manage a factory sale |
+| POST | `/factory/:id/payments` | Add embedded sale payment |
+| DELETE | `/factory/:id/payments/:paymentId` | Remove embedded sale payment |
+| GET | `/factory/:id/invoice?format=pdf\|html` | Generate invoice for a sale |
+| GET | `/factory/invoice/by-buyer` | Generate buyer invoice |
+| GET, POST | `/labor` | List or create labor records |
+| GET | `/labor/stats` | Labor statistics |
+| GET, PUT, DELETE | `/labor/:id` | Manage labor record |
+| PATCH | `/labor/:id/pay` | Toggle paid/due status |
+| GET, POST | `/payments` | List or create general-ledger payments |
+| GET | `/payments/stats` | General payment statistics |
+| GET, PUT, DELETE | `/payments/:id` | Manage general payment |
+| GET | `/dashboard` | Aggregated dashboard data |
+
+## CSV imports, invoices, and PDFs
+
+### CSV import
+
+Upload a CSV file as multipart form data to `POST /api/merchant-transactions/import`. Use `?preview=true` to validate and preview parsed rows before submission. Confirm the accepted rows with `POST /api/merchant-transactions/import-confirm`.
+
+The import process links or creates supplier masters using phone numbers. Treat imports as an operationally sensitive process: retain the source CSV, preview before confirmation, and validate balances after import.
+
+### Invoice rendering
+
+Invoice templates in `controllers/invoiceController.js` render HTML, then dynamically import `puppeteer-core` and launch Chromium. Browser resolution prefers the serverless Chromium package on Linux/serverless and otherwise uses `PUPPETEER_EXECUTABLE_PATH` or known platform paths.
+
+Set `format=html` for markup inspection or `format=pdf` for an A4 PDF. `assets/logo.png` is embedded in invoice output. The code references `assets/fonts/NotoSans-Regular.ttf`; include that font in a deployment if reliable rupee-symbol rendering is required.
+
+## Deployment
 
 ### Docker
-```dockerfile
-FROM node:20-slim
-RUN apt-get update && apt-get install -y chromium --no-install-recommends
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY . .
-EXPOSE 8080
-CMD ["node", "server.js"]
+
+The provided `Dockerfile` installs Chromium and its dependencies, sets `PUPPETEER_EXECUTABLE_PATH`, exposes port `8080`, and starts `node server.js`.
+
+```bash
+docker build -t dooars-green-api .
+docker run --rm -p 8080:8080 \
+  -e PORT=8080 \
+  -e NODE_ENV=production \
+  -e MONGO_URI \
+  -e JWT_SECRET \
+  -e JWT_REFRESH_SECRET \
+  -e ALLOWED_ORIGINS \
+  dooars-green-api
 ```
 
-### Vercel (frontend)
-1. Connect `Dooars greenfrontend` to Vercel
-2. Set `VITE_API_BASE_URL=https://your-backend.railway.app/api`
-3. Build command: `npm run build`, Output: `dist`
+### Railway/Nixpacks and Vercel
 
----
+`nixpacks.toml` installs Chromium and starts `node server.js`, so Railway can deploy this repository directly after the production environment variables are set.
 
-## 11. Known Issues & Fixes
+`server.js` exports the Express app when `VERCEL` is set, allowing a serverless deployment. No `vercel.json` is present; configure routing and serverless limits in the target platform if using this option. Puppeteer startup time and the global 10-second timeout make a long-lived container platform more suitable for dependable PDF generation.
 
-| Issue | Root Cause | Fix Applied |
+### Production checklist
+
+- Set unique, high-entropy JWT secrets; do not rely on code fallbacks.
+- Configure exact frontend origins in `ALLOWED_ORIGINS`.
+- Use TLS and `NODE_ENV=production`.
+- Ensure MongoDB backups, least-privilege credentials, and network access restrictions.
+- Confirm Chromium and the PDF font asset are available in the runtime image.
+- Check `/` health, authenticated API access, refresh-cookie behavior, and a PDF invoice after deployment.
+
+## Migrations and operations
+
+Migration scripts are one-time administrative tools and require `MONGO_URI`:
+
+| Script | Purpose |
+|---|---|
+| `scripts/migrate-createdBy.js` | Backfill tenant ownership and update legacy indexes |
+| `scripts/migrate-merchants.js` | Link legacy transaction merchant names to supplier masters |
+| `scripts/migrate-buyers.js` | Link legacy factory buyer names to buyer masters |
+
+Back up MongoDB and test against a restored copy before running a migration. There are no automated tests or CI workflows in this repository, so production changes need a manual smoke test of authentication, tenant separation, CRUD, CSV import, and PDF generation.
+
+## Production risks and technical debt
+
+These are observations from the current implementation, not fixed by this documentation update:
+
+| Priority | Finding | Impact |
 |---|---|---|
-| ₹ shows as `?` in PDF | UTF-8 literal in HTML | Use `&#x20B9;` HTML entity |
-| Table headers wrap to 2 lines | No `white-space: nowrap` | Added to `thead th` + colgroup widths |
-| Watermark blocks row backgrounds | `z-index: -10` on watermark | Changed to `fixed` + `z-index: 0`; content at `z-index: 1` |
-| Puppeteer require() crash | puppeteer-core v21+ is ESM | Use `await import('puppeteer-core')` |
-| Chrome path hardcoded to Windows | No multi-platform detection | Platform-aware path resolution + env var support |
-| Phone search not filtering | Only name was searched | Denormalized `merchantPhone` field + `$or` across name, phone, merchant ID |
-| AND filter broken | Multiple params overwrote each other | Refactored to `andConditions[]` → `{ $and: [...] }` |
+| High | Registration is public and accepts a role; password reset is public and phone-based. | Account creation and password-reset abuse risk. |
+| High | JWT fallback secret strings exist in code. | A misconfigured production deployment could use predictable signing keys. |
+| High | CSV import references `utils/genTxnId`, but that module is absent. | Import confirmation can fail at runtime. |
+| Medium | Single factory invoice lookup is not scoped by `createdBy`. | An authenticated user may access an invoice by another tenant’s record ID. |
+| Medium | Roles are stored but no mounted route enforces them. | Admin/Manager does not currently enforce privilege boundaries. |
+| Medium | The referenced Noto Sans font is missing from `assets/fonts`. | PDF currency glyphs may render incorrectly. |
+| Medium | Global response timeout is 10 seconds. | PDF responses may be aborted under load. |
+| Low | `merchantAdvanceRoutes.js` is not mounted and `html-pdf-node` is not imported. | Dead or misleading code/dependency. |
+| Low | `PORT` defaults to `5000`, while Docker exposes `8080`. | Local/default port expectations differ. |
+
+Address the high-priority findings before treating this service as hardened for new public users. Until then, restrict registration/reset access at the API gateway or application layer and continuously monitor authentication and invoice access logs.
