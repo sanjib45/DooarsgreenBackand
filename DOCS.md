@@ -282,3 +282,5 @@ CMD ["node", "server.js"]
 | Chrome path hardcoded to Windows | No multi-platform detection | Platform-aware path resolution + env var support |
 | Phone search not filtering | Only name was searched | Denormalized `merchantPhone` field + `$or` across name, phone, merchant ID |
 | AND filter broken | Multiple params overwrote each other | Refactored to `andConditions[]` → `{ $and: [...] }` |
+| Negative balance shown as `0` on merchant PDFs | `Math.max(0, ...)` floored `netFinalAmount` whenever advances/payments exceeded the gross payable | Removed the `Math.max(0, ...)` clamp so `netFinalAmount` can render negative values in `buildMultiInvoiceHtml` (`controllers/invoiceController.js`) |
+| Merchant invoice TOTAL row missing avg LESS%, RATE, L.RATE, NET QTY | Total reducer in `buildMultiInvoiceHtml` didn't accumulate `netQty`, `labourHeadCount`, `labourAmount`, `lessPercent`, `ratePerKg`, `labourCharge` | Extended the totals reducer and derived `avgLessPercent`, `avgRate`, `avgLabourCharge` (division by transaction count) so every TOTAL row column is populated |
