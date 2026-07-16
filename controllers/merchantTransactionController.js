@@ -2,10 +2,38 @@ const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantPayment     = require('../models/MerchantPayment');
 const Merchant            = require('../models/Merchant');
 const { validationResult } = require('express-validator');
+const { buildDayRangeFilter } = require('../utils/dateRange');
+
+const isPlaceholderPhone = (phone) => /^(NO-PHONE-|LEGACY|NEEDS-PHONE-)/i.test(String(phone || '').trim());
+
+async function linkOrCreateMerchant(userId, { merchantId, merchantName, merchantPhone }) {
+  let mId = merchantId;
+  if (mId) return mId;
+  if (!merchantPhone) {
+    const err = new Error('Merchant must be linked. Select an existing merchant or enter a real phone number.');
+    err.status = 400;
+    throw err;
+  }
+  const phoneClean = String(merchantPhone).trim();
+  if (isPlaceholderPhone(phoneClean)) {
+    const err = new Error('Placeholder phone numbers are not allowed. Enter a real phone number.');
+    err.status = 400;
+    throw err;
+  }
+  let merchant = await Merchant.findOne({ phone: phoneClean, createdBy: userId });
+  if (!merchant) {
+    merchant = await Merchant.create({
+      createdBy: userId,
+      name: String(merchantName || '').trim() || phoneClean,
+      phone: phoneClean,
+    });
+  }
+  return merchant._id;
+}
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 function genTxnId() {
-  return 'TXN-' + Date.now().toString().slice(-7) + Math.floor(Math.random() * 9 + 1);
+  return `TXN-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 }
 
 /**
@@ -90,15 +118,9 @@ exports.getAll = async (req, res) => {
       }
     }
 
-    // ── Date range filter ────────────────────────────────────────────────────
-    if (startDate || endDate) {
-      const dateFilter = {};
-      if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        dateFilter.$lte = end;
-      }
+    // ── Date range filter (full IST calendar days) ───────────────────────────
+    const dateFilter = buildDayRangeFilter(startDate, endDate);
+    if (dateFilter) {
       andConditions.push({ transactionDate: dateFilter });
     }
 
@@ -196,20 +218,19 @@ exports.create = async (req, res) => {
     const userId = req.user._id;
 
     // ── Auto-link or auto-create Merchant Master ──
-    let mId = req.body.merchant || req.body.merchantId;
-    if (!mId && req.body.merchantPhone) {
-      const phoneClean = req.body.merchantPhone.trim();
-      let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
-      if (!merchant) {
-        merchant = await require('../models/Merchant').create({
-          createdBy: userId,
-          name: req.body.merchantName.trim(),
-          phone: phoneClean,
-        });
+    try {
+      const mId = await linkOrCreateMerchant(userId, {
+        merchantId: req.body.merchant || req.body.merchantId,
+        merchantName: req.body.merchantName,
+        merchantPhone: req.body.merchantPhone,
+      });
+      if (mId) req.body.merchant = mId;
+    } catch (linkErr) {
+      if (linkErr.status === 400) {
+        return res.status(400).json({ success: false, message: linkErr.message });
       }
-      mId = merchant._id;
+      throw linkErr;
     }
-    if (mId) req.body.merchant = mId;
 
     // Inject calculated fields before save (pre-save hook also does this, double-safe)
     const calc = MerchantTransaction.computeFields(req.body);
@@ -241,19 +262,21 @@ exports.update = async (req, res) => {
     const merged = { ...existing, ...req.body };
 
     // ── Auto-link or auto-create Merchant Master if missing ──
-    let mId = merged.merchant || merged.merchantId;
-    if (!mId && merged.merchantPhone) {
-      const phoneClean = merged.merchantPhone.trim();
-      let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
-      if (!merchant) {
-        merchant = await require('../models/Merchant').create({
-          createdBy: userId,
-          name: merged.merchantName.trim(),
-          phone: phoneClean,
-        });
+    try {
+      const mId = await linkOrCreateMerchant(userId, {
+        merchantId: merged.merchant || merged.merchantId,
+        merchantName: merged.merchantName,
+        merchantPhone: merged.merchantPhone,
+      });
+      if (mId) {
+        merged.merchant = mId;
+        req.body.merchant = mId;
       }
-      merged.merchant = merchant._id;
-      req.body.merchant = merchant._id; // Ensure it gets updated in DB
+    } catch (linkErr) {
+      if (linkErr.status === 400) {
+        return res.status(400).json({ success: false, message: linkErr.message });
+      }
+      throw linkErr;
     }
 
     const calc   = MerchantTransaction.computeFields(merged);
@@ -362,23 +385,13 @@ exports.importCsv = async (req, res) => {
       const userId = req.user._id;
       for (const payload of validRows) {
         try {
-          // Auto-link/create Merchant Master
-          let mId = undefined;
-          if (payload.merchantPhone) {
-            const phoneClean = payload.merchantPhone;
-            let merchant = await require('../models/Merchant').findOne({ phone: phoneClean, createdBy: userId });
-            if (!merchant) {
-              merchant = await require('../models/Merchant').create({
-                createdBy: userId,
-                name: payload.merchantName,
-                phone: phoneClean,
-              });
-            }
-            mId = merchant._id;
-          }
-          if (mId) payload.merchant = mId;
+          const mId = await linkOrCreateMerchant(userId, {
+            merchantName: payload.merchantName,
+            merchantPhone: payload.merchantPhone,
+          });
+          payload.merchant = mId;
           
-          payload.transactionId = require('../utils/genTxnId')();
+          payload.transactionId = genTxnId();
           const calc = MerchantTransaction.computeFields(payload);
           await MerchantTransaction.create({ ...payload, ...calc, createdBy: userId });
           insertedCount++;
@@ -421,25 +434,17 @@ exports.importJsonConfirm = async (req, res) => {
 
   for (const row of items) {
     try {
-      let mId = undefined;
-      if (row.merchantPhone) {
-        let merchant = await require('../models/Merchant').findOne({ phone: row.merchantPhone, createdBy: userId });
-        if (!merchant) {
-          merchant = await require('../models/Merchant').create({
-            createdBy: userId,
-            name: row.merchantName,
-            phone: row.merchantPhone,
-          });
-        }
-        mId = merchant._id;
-      }
+      const mId = await linkOrCreateMerchant(userId, {
+        merchantName: row.merchantName,
+        merchantPhone: row.merchantPhone,
+      });
       
       const payload = { ...row };
       // Ensure date is correctly instantiated
       payload.transactionDate = new Date(payload.transactionDate);
-      if (mId) payload.merchant = mId;
+      payload.merchant = mId;
       
-      payload.transactionId = require('../utils/genTxnId')();
+      payload.transactionId = genTxnId();
       const calc = MerchantTransaction.computeFields(payload);
       
       await MerchantTransaction.create({ ...payload, ...calc, createdBy: userId });

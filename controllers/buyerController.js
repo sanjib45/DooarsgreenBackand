@@ -60,6 +60,12 @@ exports.findOrCreate = async (req, res, next) => {
       if (name && name.trim() !== existing.name) { existing.name = name.trim(); await existing.save(); }
       return res.status(200).json({ success: true, data: existing, isNew: false, message: 'Existing buyer returned' });
     }
+    if (/^(NO-PHONE-|LEGACY)/i.test(String(phone).trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Placeholder phone numbers are not allowed. Enter a real phone number.',
+      });
+    }
     const buyer = await Buyer.create({
       createdBy: userId,
       name: name.trim(),

@@ -1,5 +1,7 @@
 const Merchant            = require('../models/Merchant');
 const MerchantTransaction = require('../models/MerchantTransaction');
+const MerchantAdvance     = require('../models/MerchantAdvance');
+const MerchantMasterPayment = require('../models/MerchantMasterPayment');
 const mongoose            = require('mongoose');
 const { validationResult } = require('express-validator');
 
@@ -103,7 +105,7 @@ exports.getById = async (req, res, next) => {
 // ── POST /api/merchants — findOrCreate ───────────────────────────────────────
 // If phone exists for THIS user → return existing merchant.
 // If not → create new merchant owned by THIS user.
-// SCOPED: phone uniqueness is per-user, not global
+// Rejects placeholder phones (NO-PHONE-*, LEGACY*).
 exports.findOrCreate = async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -113,21 +115,37 @@ exports.findOrCreate = async (req, res, next) => {
   try {
     const userId = req.user._id;
     const { name, phone, address, notes } = req.body;
+    const phoneClean = String(phone || '').trim();
+    const nameClean  = String(name || '').trim();
 
-    // Check if merchant with this phone already exists FOR THIS USER
-    const existing = await Merchant.findOne({ phone: phone.trim(), createdBy: userId });
-    if (existing) {
+    if (!nameClean || !phoneClean) {
+      return res.status(400).json({ success: false, message: 'Name and phone are required' });
+    }
+    if (/^(NO-PHONE-|LEGACY)/i.test(phoneClean)) {
       return res.status(400).json({
         success: false,
-        message: 'This phone number is already registered with another merchant. Please use a different phone number.',
+        message: 'Placeholder phone numbers are not allowed. Enter a real phone number.',
       });
     }
 
-    // Create new merchant owned by this user
+    const existing = await Merchant.findOne({ phone: phoneClean, createdBy: userId });
+    if (existing) {
+      if (nameClean && nameClean !== existing.name) {
+        existing.name = nameClean;
+        await existing.save();
+      }
+      return res.status(200).json({
+        success: true,
+        data: existing,
+        isNew: false,
+        message: 'Existing merchant returned',
+      });
+    }
+
     const merchant = await Merchant.create({
       createdBy: userId,
-      name: name.trim(),
-      phone: phone.trim(),
+      name: nameClean,
+      phone: phoneClean,
       address: address?.trim() || '',
       notes: notes?.trim() || '',
     });
@@ -140,9 +158,9 @@ exports.findOrCreate = async (req, res, next) => {
     });
   } catch (err) {
     if (err.code === 11000) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
-        message: 'A merchant with this phone number already exists in your account.',
+        message: 'A merchant with this phone already exists for your account',
       });
     }
     next(err);
@@ -172,10 +190,10 @@ exports.update = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
 
-    // Also update the denormalized merchantName in all linked transactions (scoped)
+    // Keep denormalized transaction fields in sync for search/invoices.
     await MerchantTransaction.updateMany(
       { merchant: merchant._id, createdBy: userId },
-      { $set: { merchantName: merchant.name } }
+      { $set: { merchantName: merchant.name, merchantPhone: merchant.phone } }
     );
 
     res.json({ success: true, data: merchant });
@@ -213,6 +231,19 @@ exports.remove = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Merchant not found' });
     }
 
-    res.json({ success: true, message: `Merchant "${merchant.name}" deleted successfully` });
+    // Cascade: remove orphan advances + merchant-level payments (no txn blockers)
+    const [advRes, payRes] = await Promise.all([
+      MerchantAdvance.deleteMany({ merchant: req.params.id, createdBy: userId }),
+      MerchantMasterPayment.deleteMany({ merchant: req.params.id, createdBy: userId }),
+    ]);
+
+    res.json({
+      success: true,
+      message: `Merchant "${merchant.name}" deleted successfully`,
+      cascaded: {
+        advancesRemoved: advRes.deletedCount || 0,
+        masterPaymentsRemoved: payRes.deletedCount || 0,
+      },
+    });
   } catch (err) { next(err); }
 };

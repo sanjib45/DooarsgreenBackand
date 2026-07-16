@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const {
+  getAuthConfig,
+  cookieCheck,
   registerUser,
   loginUser,
   refreshToken,
@@ -7,10 +9,12 @@ const {
   resetPassword,
 } = require('../controllers/authController');
 
+router.get('/config',          getAuthConfig);   // public — register mode for UI
+router.get('/cookie-check',    cookieCheck);     // public — post-deploy cookie probe
 router.post('/register',       registerUser);
 router.post('/login',          loginUser);
-router.post('/refresh',        refreshToken);  // issues new accessToken using httpOnly cookie
-router.post('/logout',         logoutUser);    // clears cookie + DB hash
+router.post('/refresh',        refreshToken);
+router.post('/logout',         logoutUser);
 router.post('/reset-password', resetPassword);
 
 module.exports = router;

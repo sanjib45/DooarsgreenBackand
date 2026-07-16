@@ -27,7 +27,6 @@ const merchantAdvanceSchema = new mongoose.Schema(
     },
     advanceId: {
       type: String,
-      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -54,5 +53,8 @@ const merchantAdvanceSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+merchantAdvanceSchema.index({ createdBy: 1, advanceId: 1 }, { unique: true });
+merchantAdvanceSchema.index({ merchant: 1, createdBy: 1, advanceDate: -1 });
 
 module.exports = mongoose.model('MerchantAdvance', merchantAdvanceSchema);
