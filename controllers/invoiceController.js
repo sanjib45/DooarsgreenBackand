@@ -18,6 +18,7 @@ const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantPayment     = require('../models/MerchantPayment');
 const MerchantAdvance     = require('../models/MerchantAdvance');
 const Merchant            = require('../models/Merchant');
+const { startOfDayIST, endOfDayIST } = require('../utils/dateRange');
 
 // ── Logo: embed as base64 so it works regardless of server CWD ────────────────
 const LOGO_PATH = path.join(__dirname, '..', 'assets', 'logo.png');
@@ -898,10 +899,8 @@ exports.generateInvoiceByMerchantDate = async (req, res) => {
       });
     }
 
-    const rangeStart = new Date(finalStart);
-    rangeStart.setHours(0, 0, 0, 0);
-    const rangeEnd   = new Date(finalEnd);
-    rangeEnd.setHours(23, 59, 59, 999);
+    const rangeStart = startOfDayIST(finalStart);
+    const rangeEnd   = endOfDayIST(finalEnd);
 
     const transactions = await MerchantTransaction.find({
       createdBy: userId,

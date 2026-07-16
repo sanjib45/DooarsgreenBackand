@@ -25,7 +25,6 @@ const merchantMasterPaymentSchema = new mongoose.Schema(
     },
     paymentId: {
       type: String,
-      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -53,6 +52,7 @@ const merchantMasterPaymentSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+merchantMasterPaymentSchema.index({ createdBy: 1, paymentId: 1 }, { unique: true });
 merchantMasterPaymentSchema.index({ merchant: 1, createdBy: 1, paymentDate: -1 });
 
 module.exports = mongoose.model('MerchantMasterPayment', merchantMasterPaymentSchema);

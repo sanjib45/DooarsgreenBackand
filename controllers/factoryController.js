@@ -1,6 +1,45 @@
 const Factory = require('../models/Factory');
 const Buyer   = require('../models/Buyer');
 const { validationResult } = require('express-validator');
+const { buildDayRangeFilter } = require('../utils/dateRange');
+
+const isPlaceholderPhone = (phone) => /^(NO-PHONE-|LEGACY|NEEDS-PHONE-)/i.test(String(phone || '').trim());
+
+async function linkOrCreateBuyer(userId, body) {
+  const buyerId = body.buyer || body.buyerId;
+  if (buyerId) {
+    const buyer = await Buyer.findOne({ _id: buyerId, createdBy: userId }).lean();
+    if (!buyer) {
+      const err = new Error('Selected buyer was not found');
+      err.status = 404;
+      throw err;
+    }
+    return buyer;
+  }
+
+  const buyerName = String(body.buyerName || '').trim();
+  const buyerPhone = String(body.buyerPhone || body.buyerObj?.phone || '').trim();
+  if (!buyerName || !buyerPhone) {
+    const err = new Error('Buyer must be linked. Select an existing buyer or enter a real phone number.');
+    err.status = 400;
+    throw err;
+  }
+  if (isPlaceholderPhone(buyerPhone)) {
+    const err = new Error('Placeholder phone numbers are not allowed. Enter a real phone number.');
+    err.status = 400;
+    throw err;
+  }
+
+  let buyer = await Buyer.findOne({ phone: buyerPhone, createdBy: userId });
+  if (!buyer) {
+    buyer = await Buyer.create({
+      createdBy: userId,
+      name: buyerName,
+      phone: buyerPhone,
+    });
+  }
+  return buyer;
+}
 
 /**
  * GET /api/factory
@@ -60,15 +99,9 @@ exports.getAll = async (req, res) => {
       }
     }
 
-    // ── Date range filter ────────────────────────────────────────────────────
-    if (startDate || endDate) {
-      const dateFilter = {};
-      if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) {
-        const ed = new Date(endDate);
-        ed.setUTCHours(23, 59, 59, 999);
-        dateFilter.$lte = ed;
-      }
+    // ── Date range filter (full IST calendar days) ───────────────────────────
+    const dateFilter = buildDayRangeFilter(startDate, endDate);
+    if (dateFilter) {
       andConditions.push({ date: dateFilter });
     }
 
@@ -154,9 +187,15 @@ exports.create = async (req, res) => {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
     const userId = req.user._id;
-    const item = await Factory.create({ ...req.body, createdBy: userId });
+    const buyer = await linkOrCreateBuyer(userId, req.body);
+    const item = await Factory.create({
+      ...req.body,
+      buyer: buyer._id,
+      buyerName: buyer.name,
+      createdBy: userId,
+    });
     res.status(201).json({ success: true, data: item });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+  } catch (err) { res.status(err.status || 500).json({ success: false, message: err.message }); }
 };
 
 // PUT /api/factory/:id — SCOPED by createdBy
@@ -165,14 +204,17 @@ exports.update = async (req, res) => {
   if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
   try {
     const userId = req.user._id;
+    const existing = await Factory.findOne({ _id: req.params.id, createdBy: userId }).lean();
+    if (!existing) return res.status(404).json({ success: false, message: 'Sale record not found' });
+    const merged = { ...existing, ...req.body };
+    const buyer = await linkOrCreateBuyer(userId, merged);
     const item = await Factory.findOneAndUpdate(
       { _id: req.params.id, createdBy: userId },
-      req.body,
+      { ...req.body, buyer: buyer._id, buyerName: buyer.name },
       { new: true, runValidators: true }
     );
-    if (!item) return res.status(404).json({ success: false, message: 'Sale record not found' });
     res.json({ success: true, data: item });
-  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+  } catch (err) { res.status(err.status || 500).json({ success: false, message: err.message }); }
 };
 
 // DELETE /api/factory/:id — SCOPED by createdBy

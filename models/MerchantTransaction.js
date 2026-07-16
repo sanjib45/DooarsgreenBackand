@@ -24,10 +24,8 @@ const merchantTransactionSchema = new mongoose.Schema(
     // ── Identity ──────────────────────────────────────────
     transactionId: {
       type: String,
-      unique: true,
       trim: true,
       uppercase: true,
-      index: true,
     },
     merchant: {
       type: mongoose.Schema.Types.ObjectId,
@@ -120,7 +118,7 @@ merchantTransactionSchema.pre('save', async function (next) {
   
   if (!this.isNew) {
     const MerchantPayment = mongoose.model('MerchantPayment');
-    const payments = await MerchantPayment.find({ transaction: this._id });
+    const payments = await MerchantPayment.find({ transaction: this._id, createdBy: this.createdBy });
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     this.balance = Math.round((this.finalPayable - totalPaid) * 100) / 100;
   } else {
@@ -160,7 +158,7 @@ merchantTransactionSchema.pre('findOneAndUpdate', async function (next) {
 
     // Recompute balance = finalPayable − all payments recorded so far
     const MerchantPayment = mongoose.model('MerchantPayment');
-    const payments = await MerchantPayment.find({ transaction: docToUpdate._id }).lean();
+    const payments = await MerchantPayment.find({ transaction: docToUpdate._id, createdBy: docToUpdate.createdBy }).lean();
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     data.balance = round2(calc.finalPayable - totalPaid);
   } catch (e) {
@@ -203,6 +201,7 @@ merchantTransactionSchema.methods._recalculate = function () {
 merchantTransactionSchema.statics.computeFields = computeFields;
 
 // ── Compound indexes for fast queries (all filter combinations) ───────────────
+merchantTransactionSchema.index({ createdBy: 1, transactionId: 1 }, { unique: true });
 merchantTransactionSchema.index({ createdBy: 1, merchantName: 1, transactionDate: -1 });
 merchantTransactionSchema.index({ createdBy: 1, merchantPhone: 1, transactionDate: -1 });
 merchantTransactionSchema.index({ createdBy: 1, merchant: 1, transactionDate: -1 });
