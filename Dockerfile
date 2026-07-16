@@ -32,6 +32,8 @@ RUN npm install --production
 
 COPY . .
 
-EXPOSE 8080
+# Railway Public Networking must match this port (set PORT in Railway Variables)
+ENV PORT=5000
+EXPOSE 5000
 
 CMD ["node", "server.js"]
