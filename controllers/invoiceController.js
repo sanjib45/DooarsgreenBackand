@@ -252,8 +252,8 @@ const SHARED_CSS = `
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10.5px;
-    table-layout: fixed;
+    font-size: 9.5px;            /* slightly smaller so 13 nowrap cols fit A4 width */
+    table-layout: auto;          /* let each column grow to fit its widest cell — no forced widths */
   }
   colgroup col { /* override per-table */  }
 
@@ -274,12 +274,10 @@ const SHARED_CSS = `
   thead th.num { text-align: right; padding-right: 6px; }
 
   tbody td {
-    padding: 5px 4px;
+    padding: 5px 5px;
     text-align: center;
     border-bottom: 1px solid #e8e8e8;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: nowrap;         /* CRITICAL: every value stays on ONE line — no wrapping */
   }
   tbody td.num  { text-align: right; padding-right: 6px; }
   tbody td.left { text-align: left;  padding-left:  6px; }
@@ -420,16 +418,16 @@ function buildInvoiceHtml(txn, payments) {
     <tr class="row-even">
       <td class="left">${fmtDateShort(txn.transactionDate)}</td>
       <td class="num">${fmt(txn.grossQty)}</td>
-      <td class="num">${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '&mdash;'}</td>
+      <td class="num">${txn.lessPercent > 0 ? `${txn.lessPercent}%` : '0%'}</td>
       <td class="num">${fmt(txn.lessQty)}</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">${RS}${fmt(txn.ratePerKg)}</td>
-      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '&mdash;'}</td>
-      <td class="num">${txn.labourCharge > 0 ? `${RS}${fmt(txn.labourCharge)}` : '&mdash;'}</td>
-      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '&mdash;'}</td>
+      <td class="num">${txn.labourHeadCount || 0}</td>
+      <td class="num">${RS}${fmt(txn.labourCharge || 0)}</td>
+      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : `${RS}0`}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
-      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '&mdash;'}</td>
+      <td class="num">${RS}${fmt(txn.advancePayment || 0)}</td>
       <td class="num"><strong>${RS}${fmt(txn.finalPayable)}</strong></td>
     </tr>`;
 
@@ -441,12 +439,12 @@ function buildInvoiceHtml(txn, payments) {
       <td class="num">${fmt(txn.lessQty)}</td>
       <td class="num"><strong>${fmt(txn.netQty)}</strong></td>
       <td class="num">-</td>
-      <td class="num">${txn.labourHeadCount > 0 ? txn.labourHeadCount : '-'}</td>
+      <td class="num">${txn.labourHeadCount || 0}</td>
       <td class="num">-</td>
-      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : '-'}</td>
+      <td class="num" style="color:#c0392b;">${txn.labourAmount > 0 ? `-${RS}${fmt(txn.labourAmount)}` : `${RS}0`}</td>
       <td class="num">${RS}${fmt(txn.grossAmount)}</td>
       <td class="num">${RS}${fmt(txn.netPayable)}</td>
-      <td class="num">${txn.advancePayment > 0 ? `${RS}${fmt(txn.advancePayment)}` : '-'}</td>
+      <td class="num">${RS}${fmt(txn.advancePayment || 0)}</td>
       <td class="num total-amount">${RS}${fmt(txn.finalPayable)}</td>
     </tr>`;
 
@@ -490,21 +488,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 <!-- Transaction Table -->
 <div class="table-wrapper">
   <table>
-    <colgroup>
-      <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:6%">
-      <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:7%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:11%">
-      <col style="width:8%">
-      <col style="width:8%">
-      <col style="width:12%">
-    </colgroup>
+    <colgroup></colgroup>
     <thead>
       <tr>
         <th class="left">DATE</th>
@@ -675,16 +659,16 @@ function buildMultiInvoiceHtml(merchantName, startDate, endDate, transactions, p
       <tr class="${i % 2 === 0 ? 'row-even' : 'row-odd'}">
         <td class="left">${fmtDateShort(t.transactionDate)}</td>
         <td class="num">${fmt(t.grossQty)}</td>
-        <td class="num">${t.lessPercent > 0 ? `${t.lessPercent}%` : '&mdash;'}</td>
+        <td class="num">${t.lessPercent > 0 ? `${t.lessPercent}%` : '0%'}</td>
         <td class="num">${fmt(t.lessQty)}</td>
         <td class="num"><strong>${fmt(t.netQty)}</strong></td>
         <td class="num">${RS}${fmt(t.ratePerKg)}</td>
-        <td class="num">${t.labourHeadCount > 0 ? t.labourHeadCount : '&mdash;'}</td>
-        <td class="num">${t.labourCharge > 0 ? `${RS}${fmt(t.labourCharge)}` : '&mdash;'}</td>
-        <td class="num" style="color:#c0392b;">${t.labourAmount > 0 ? `-${RS}${fmt(t.labourAmount)}` : '&mdash;'}</td>
+        <td class="num">${t.labourHeadCount || 0}</td>
+        <td class="num">${RS}${fmt(t.labourCharge || 0)}</td>
+        <td class="num" style="color:#c0392b;">${t.labourAmount > 0 ? `-${RS}${fmt(t.labourAmount)}` : `${RS}0`}</td>
         <td class="num">${RS}${fmt(t.grossAmount)}</td>
         <td class="num">${RS}${fmt(t.netPayable)}</td>
-        <td class="num">${t.advancePayment > 0 ? `${RS}${fmt(t.advancePayment)}` : '&mdash;'}</td>
+        <td class="num">${RS}${fmt(t.advancePayment || 0)}</td>
         <td class="num"><strong>${RS}${fmt(t.finalPayable)}</strong></td>
       </tr>
       ${paymentSubRows}`;
@@ -758,21 +742,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 
 <div class="table-wrapper">
   <table>
-    <colgroup>
-      <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:6%">
-      <col style="width:8%">
-      <col style="width:7%">
-      <col style="width:7%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:6%">
-      <col style="width:11%">
-      <col style="width:8%">
-      <col style="width:8%">
-      <col style="width:12%">
-    </colgroup>
+    <colgroup></colgroup>
     <thead>
       <tr>
         <th class="left">DATE</th>
@@ -797,16 +767,16 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
       <tr class="total-row">
         <td class="left"><strong>TOTAL</strong></td>
         <td class="num">${fmt(totals.grossQty)}</td>
-        <td class="num">${avgLessPercent > 0 ? avgLessPercent + '%' : '-'}</td>
+        <td class="num">${avgLessPercent > 0 ? avgLessPercent + '%' : '0%'}</td>
         <td class="num">${fmt(totals.lessQty)}</td>
         <td class="num"><strong>${fmt(totals.netQty)}</strong></td>
         <td class="num">${RS}${fmt(avgRate)}</td>
-        <td class="num">${totals.labourHeadCount > 0 ? totals.labourHeadCount : '-'}</td>
-        <td class="num">${avgLabourCharge > 0 ? `${RS}${fmt(avgLabourCharge)}` : '-'}</td>
-        <td class="num" style="color:#c0392b;">${totals.labourAmount > 0 ? `-${RS}${fmt(totals.labourAmount)}` : '-'}</td>
+        <td class="num">${totals.labourHeadCount || 0}</td>
+        <td class="num">${RS}${fmt(avgLabourCharge || 0)}</td>
+        <td class="num" style="color:#c0392b;">${totals.labourAmount > 0 ? `-${RS}${fmt(totals.labourAmount)}` : `${RS}0`}</td>
         <td class="num">${RS}${fmt(totals.grossAmount)}</td>
         <td class="num">${RS}${fmt(totals.netPayable)}</td>
-        <td class="num">${totals.advancePayment > 0 ? `${RS}${fmt(totals.advancePayment)}` : '-'}</td>
+        <td class="num">${RS}${fmt(totals.advancePayment || 0)}</td>
         <td class="num total-amount">${RS}${fmt(totals.finalPayable)}</td>
       </tr>
     </tbody>
@@ -1115,18 +1085,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 
 <div class="table-wrapper">
   <table>
-    <colgroup>
-      <col style="width:5%">
-      <col style="width:9%">
-      <col style="width:10%">
-      <col style="width:10%">
-      <col style="width:7%">
-      <col style="width:10%">
-      <col style="width:10%">
-      <col style="width:7%">
-      <col style="width:11%">
-      <col style="width:11%">
-    </colgroup>
+    <colgroup></colgroup>
     <thead>
       <tr>
         <th>SL</th>
@@ -1327,18 +1286,7 @@ ${LOGO_BASE64 ? `<div class="watermark-bg"><img src="${LOGO_BASE64}" alt="waterm
 
 <div class="table-wrapper">
   <table>
-    <colgroup>
-      <col style="width:5%">
-      <col style="width:9%">
-      <col style="width:10%">
-      <col style="width:10%">
-      <col style="width:7%">
-      <col style="width:10%">
-      <col style="width:10%">
-      <col style="width:7%">
-      <col style="width:11%">
-      <col style="width:11%">
-    </colgroup>
+    <colgroup></colgroup>
     <thead>
       <tr>
         <th>SL</th>
